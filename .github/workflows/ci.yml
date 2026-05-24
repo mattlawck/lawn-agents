@@ -66,8 +66,14 @@ jobs:
     name: SonarCloud
     needs: quality
     runs-on: ubuntu-latest
-    # Forks can't access SONAR_TOKEN; skip the scan there rather than fail.
-    if: ${{ github.event.pull_request.head.repo.fork == false || github.event_name != 'pull_request' }}
+    # GitHub withholds repo secrets from fork PRs and from Dependabot-
+    # authored PRs (security-by-default). SONAR_TOKEN would be empty in
+    # both, so skip the scan rather than fail. Sonar still runs on
+    # direct pushes to main and on PRs from the same repo by a human.
+    if: >
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.fork == false &&
+       github.actor != 'dependabot[bot]')
     steps:
       - uses: actions/checkout@v4
         with:

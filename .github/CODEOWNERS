@@ -1,0 +1,7 @@
+# Code owners — see https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# `@mattlawck` is auto-requested as reviewer on every PR. With
+# solo-friendly branch protection (no approval required), this just
+# means GitHub knows who maintains what — it doesn't block merges.
+
+*   @mattlawck
