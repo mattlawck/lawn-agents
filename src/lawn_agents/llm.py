@@ -8,14 +8,12 @@ providers is a config-file change. See ADR 0006.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Literal, Protocol, TypeVar, assert_never
+from typing import TYPE_CHECKING, Literal, Protocol, assert_never
 
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from lawn_agents.config import Settings
-
-T = TypeVar("T", bound=BaseModel)
 
 ChatRole = Literal["router", "synthesizer"]
 
@@ -32,7 +30,9 @@ class ChatModel(Protocol):
         """Generate free-form text. Used by the router for intent classification."""
         ...
 
-    def complete_structured(self, *, system: str, user: str, response_model: type[T]) -> T:
+    def complete_structured[T: BaseModel](
+        self, *, system: str, user: str, response_model: type[T]
+    ) -> T:
         """Generate output that validates against `response_model`.
 
         Raises:
@@ -68,7 +68,9 @@ class GeminiChat:
         )
         return (response.text or "").strip()
 
-    def complete_structured(self, *, system: str, user: str, response_model: type[T]) -> T:
+    def complete_structured[T: BaseModel](
+        self, *, system: str, user: str, response_model: type[T]
+    ) -> T:
         """See `ChatModel.complete_structured`."""
         from google.genai import types
 
@@ -120,7 +122,9 @@ class AnthropicChat:
                 return str(getattr(block, "text", "")).strip()
         return ""
 
-    def complete_structured(self, *, system: str, user: str, response_model: type[T]) -> T:
+    def complete_structured[T: BaseModel](
+        self, *, system: str, user: str, response_model: type[T]
+    ) -> T:
         """See `ChatModel.complete_structured`."""
         tool_name = "respond"
         tool_schema = response_model.model_json_schema()
