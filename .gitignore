@@ -1,0 +1,54 @@
+# --- secrets and local config -------------------------------------------
+.env
+.env.local
+*.local.yaml
+# Your real config.yaml stays local; the committed file is
+# config.example.yaml which has placeholder values for any location.
+config.yaml
+
+# --- licensed / user-ingested content (never commit) --------------------
+# Public repo deliberately ships no third-party content. Users bring their
+# own corpus (Clemson HGIC, Super-Sod, Sod Solutions, paid PDFs, etc.) per
+# README "Bring Your Own Corpus" section.
+data/corpus/*
+data/index/*
+!data/corpus/.gitkeep
+!data/index/.gitkeep
+*.pdf
+
+# --- python -------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+*.egg
+build/
+dist/
+pip-wheel-metadata/
+
+# --- tooling caches -----------------------------------------------------
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+.nox/
+
+# --- editors / OS -------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# --- model / embeddings caches -----------------------------------------
+.cache/
+~/.cache/huggingface

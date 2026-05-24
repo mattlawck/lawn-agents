@@ -1,0 +1,179 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lawn-agents"
+version = "0.1.0"
+description = "Multi-agent lawn-care advisory for Zeon Zoysia in coastal South Carolina."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [{ name = "mattlawck" }]
+keywords = [
+    "lawn-care",
+    "agriculture",
+    "zoysia",
+    "warm-season-turf",
+    "agents",
+    "rag",
+    "gemini",
+    "google-genai",
+    "ai-studio",
+    "anthropic",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering",
+    "Operating System :: MacOS",
+]
+dependencies = [
+    "google-genai>=0.3",
+    "anthropic>=0.40.0",
+    "pydantic[email]>=2.9",
+    "pydantic-settings>=2.6",
+    "httpx>=0.28",
+    "tenacity>=9.0",
+    "pyyaml>=6.0",
+    "structlog>=24.4",
+    "rich>=13.9",
+    "lancedb>=0.16",
+    "sentence-transformers>=3.3",
+    "pypdf>=5.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "pytest-recording>=0.13",
+    "pre-commit>=4.0",
+    "types-PyYAML",
+    "types-requests",
+]
+
+[project.scripts]
+lawn-agents = "lawn_agents.main:cli"
+
+[project.urls]
+Homepage = "https://github.com/mattlawck/lawn-agents"
+Issues = "https://github.com/mattlawck/lawn-agents/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lawn_agents"]
+
+# --- ruff ----------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "N",        # pep8-naming
+    "UP",       # pyupgrade
+    "B",        # flake8-bugbear
+    "SIM",      # flake8-simplify
+    "ARG",      # flake8-unused-arguments
+    "PTH",      # flake8-use-pathlib
+    "RUF",      # ruff-specific
+    "C4",       # comprehensions
+    "PIE",      # misc
+    "RET",      # return statements
+    "TID",      # tidy imports
+    "D",        # pydocstyle
+]
+ignore = [
+    "D203",     # one-blank-line-before-class (conflicts with D211)
+    "D213",     # multi-line-summary-second-line (conflicts with D212)
+    "D107",     # __init__ docstring redundant with class docstring
+    # TC002/TC003 — moving imports under TYPE_CHECKING breaks Pydantic models
+    # that resolve annotations at runtime via get_type_hints. We deliberately
+    # keep typing imports at module top level.
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["D", "ARG001", "ARG002"]
+"scripts/**/*.py" = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+# --- mypy ---------------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_any_unimported = true
+plugins = ["pydantic.mypy"]
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = [
+    "lancedb.*",
+    "sentence_transformers.*",
+    "pypdf.*",
+    "google.genai.*",
+]
+ignore_missing_imports = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+# --- pytest --------------------------------------------------------------
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--cov=lawn_agents",
+    "--cov-report=term-missing",
+    "--cov-fail-under=60",
+]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "integration: integration tests that hit recorded HTTP cassettes",
+    "slow: tests slower than ~1s",
+]
+filterwarnings = [
+    "error",
+    # google-genai uses private typing internals that 3.14 deprecates.
+    # Strict for our code, lenient for vendored libs we can't patch.
+    "ignore::DeprecationWarning:google\\..*",
+    "ignore::DeprecationWarning:pydantic\\..*",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src/lawn_agents"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]

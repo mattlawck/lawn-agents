@@ -1,0 +1,125 @@
+# lawn-agents configuration — EXAMPLE.
+#
+# Copy this file to `config.yaml` and edit for your location and lawn.
+# `config.yaml` is gitignored so your real values stay local.
+#
+#     cp config.example.yaml config.yaml
+
+location:
+  # Example: Columbia, SC. Replace with your own.
+  zip: "29201"
+  city: "Columbia"
+  state: "SC"
+  county_fips: "45079"  # Richland County, SC — used by US Drought Monitor
+  latitude: 34.00
+  longitude: -81.03
+  coastal: false
+  usda_zone: "8a"
+
+# Phase 1 advises a single subject (the lawn). Future phases will add trees
+# and shrubs as additional subjects; the schema below shows the intended
+# shape so the extension point is visible.
+subject:
+  kind: "lawn"
+  cultivar: "Zeon Zoysia"
+  species: "Zoysia matrella"
+  installed_year: null  # set if known; informs maturity-based recommendations
+
+# Future subjects (placeholders — not loaded by Phase 1 code):
+# subjects:
+#   - kind: tree
+#     species: "Quercus virginiana"  # live oak
+#     age_class: "mature"
+#   - kind: tree
+#     species: "Quercus virginiana"
+#     age_class: "young"
+#   - kind: palm
+#     species: "Sabal palmetto"
+#   - kind: shrub
+#     species: "Hydrangea macrophylla"
+
+climate:
+  # Adjust for your microclimate. Conventional warm-season turf thresholds.
+  # Soil temps are at 4-inch depth.
+  last_frost: "2026-03-20"
+  first_frost: "2026-11-20"
+  green_up_soil_temp_f: 65
+  dormancy_soil_temp_f: 55
+  preemergent_spring_soil_temp_f: 55
+  preemergent_fall_soil_temp_f: 70
+
+knowledge:
+  # Where ingested corpus and the LanceDB index live.
+  corpus_dir: "./data/corpus"
+  index_dir: "./data/index"
+  embedding_model: "BAAI/bge-small-en-v1.5"
+  chunk_size_tokens: 700
+  chunk_overlap_tokens: 100
+  retrieval:
+    top_k_vector: 8
+    top_k_bm25: 4
+    rerank_top_k: 5
+    # If best reranked score is below this floor, knowledge.py signals
+    # "weak result" and the orchestrator may invoke the research subagent.
+    weak_score_threshold: 0.55
+
+research:
+  # Self-extending RAG. When knowledge.py returns weak results the
+  # orchestrator may dispatch a research subagent constrained to this
+  # allowlist. Auto-ingested passages are tagged requires_review=true
+  # until promoted via `lawn-agents review-additions`.
+  enabled: true
+  domain_allowlist:
+    - hgic.clemson.edu
+    - clemson.edu
+    - info.supersod.com
+    - supersod.com
+    - theturfgrassgroup.com
+    - sodsolutions.com
+    - extension.uga.edu
+    - turffiles.ncsu.edu
+    - content.ces.ncsu.edu
+    - edis.ifas.ufl.edu
+    - weather.gov
+    - drought.gov
+    - nrcs.usda.gov
+    - cpc.ncep.noaa.gov
+
+# Seed URLs for the initial corpus build. `scripts/ingest_corpus.py` will
+# fetch, chunk, and embed each. Add to taste; PDFs in data/corpus/ are
+# ingested automatically alongside.
+seed_urls:
+  - https://info.supersod.com/lawn-care/zeon-zoysia-lawn-maintenance
+  - https://info.supersod.com/zeon-zoysia-specs
+  - https://info.supersod.com/hubfs/Super-Sod%20Technical%20Sheets%20aka%20Slicks/zeon-zoysia.pdf
+  - https://info.supersod.com/lawn-academy-maintenance-guides
+  - https://info.supersod.com/lawn-care/tag/monthly-lawn-care
+  - https://content.ces.ncsu.edu/zoysiagrass-lawn-maintenance-calendar
+  - https://theturfgrassgroup.com/zeon-zoysia/ultimate-guide-to-zeon-zoysia-maintenance-tips-for-a-healthy-lush-lawn/
+
+models:
+  # Provider abstraction lives in src/lawn_agents/llm.py; see ADR 0006.
+  # `provider` picks which adapter is built — `gemini` (default, free
+  # tier via AI Studio) or `anthropic`. Swap at any time without code
+  # changes; the corresponding *_API_KEY must be present in `.env`.
+  provider: "gemini"
+  router: "gemini-2.5-flash"
+  synthesizer: "gemini-2.5-pro"
+  # Anthropic alternatives (use with provider: anthropic):
+  #   router: "claude-sonnet-4-6"
+  #   synthesizer: "claude-opus-4-7"
+  # Pin model IDs; bump in an ADR when upgrading.
+
+http:
+  # NWS asks for a descriptive User-Agent with contact info. Use any
+  # email you're willing to expose in the UA string — a GitHub noreply
+  # works great: <your-id>+<your-handle>@users.noreply.github.com
+  contact_email: "you@example.com"
+  timeout_seconds: 15
+  retries: 3
+
+notify:
+  # Phase 1: console only. Future sinks (email, SMS) plug in via the
+  # Sink Protocol in src/lawn_agents/notify.py.
+  sinks:
+    - console
