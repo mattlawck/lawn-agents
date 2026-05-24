@@ -150,6 +150,7 @@ addopts = [
     "--strict-config",
     "--cov=lawn_agents",
     "--cov-report=term-missing",
+    "--cov-report=xml",
     "--cov-fail-under=60",
 ]
 testpaths = ["tests"]
