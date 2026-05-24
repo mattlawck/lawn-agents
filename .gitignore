@@ -38,6 +38,8 @@ pip-wheel-metadata/
 .coverage
 .coverage.*
 htmlcov/
+# coverage.xml is produced by pytest and consumed by the Sonar job in CI;
+# kept gitignored so devs don't accidentally commit a stale snapshot.
 coverage.xml
 .tox/
 .nox/

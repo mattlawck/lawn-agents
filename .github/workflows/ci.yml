@@ -52,3 +52,34 @@ jobs:
           # Tests must not hit the network — recorded cassettes only.
           GEMINI_API_KEY: "test-dummy"
           ANTHROPIC_API_KEY: "sk-ant-test-dummy"
+
+      - name: Upload coverage.xml (py3.12 only)
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: error
+          retention-days: 1
+
+  sonarcloud:
+    name: SonarCloud
+    needs: quality
+    runs-on: ubuntu-latest
+    # Forks can't access SONAR_TOKEN; skip the scan there rather than fail.
+    if: ${{ github.event.pull_request.head.repo.fork == false || github.event_name != 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Sonar wants full history for better blame / new-code detection.
+          fetch-depth: 0
+
+      - name: Download coverage artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage
+
+      - name: SonarCloud scan
+        uses: SonarSource/sonarqube-scan-action@v8
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

@@ -1,0 +1,51 @@
+# Dependabot keeps runtime and CI dependencies fresh.
+# Docs: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates
+version: 2
+
+updates:
+  # Python runtime + dev deps from pyproject.toml.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "python"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      # Bundle non-breaking updates into one PR to cut review load.
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      # ML libs move fast and version pins matter for reproducibility.
+      # Let mypy/pytest auto-bump; treat torch + lancedb pins as manual.
+      - dependency-name: "lancedb"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "sentence-transformers"
+        update-types: ["version-update:semver-major"]
+
+  # GitHub Actions versions in .github/workflows/*.yml.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
