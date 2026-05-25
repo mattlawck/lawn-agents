@@ -8,7 +8,7 @@ providers is a config-file change. See ADR 0006.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Literal, Protocol, assert_never
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from pydantic import BaseModel
 
@@ -188,10 +188,13 @@ def build_chat_model(role: ChatRole, settings: Settings) -> ChatModel:
             api_key=settings.anthropic_api_key.get_secret_value(),
             model=model_id,
         )
-    # Defensive — `provider` is Literal["gemini", "anthropic"] so this is
-    # unreachable. mypy via `assert_never`; the explicit raise keeps
-    # CodeQL's py/mixed-returns happy without changing behavior.
-    assert_never(provider)
+    # Unreachable per the Literal["gemini", "anthropic"] type. The
+    # explicit raise (rather than `assert_never`) keeps CodeQL's
+    # py/mixed-returns from flagging a potential None fall-through;
+    # the `type: ignore` suppresses mypy's warn_unreachable at this
+    # defensive guard.
+    msg = f"unsupported provider: {provider!r}"  # type: ignore[unreachable]
+    raise ValueError(msg)
 
 
 def parse_router_intent(raw: str) -> str:
