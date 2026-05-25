@@ -28,7 +28,6 @@ class ChatModel(Protocol):
 
     def complete_text(self, *, system: str, user: str) -> str:
         """Generate free-form text. Used by the router for intent classification."""
-        ...
 
     def complete_structured[T: BaseModel](
         self, *, system: str, user: str, response_model: type[T]
@@ -39,7 +38,6 @@ class ChatModel(Protocol):
             pydantic.ValidationError: If the model output doesn't validate.
             RuntimeError: If the provider returned no usable content.
         """
-        ...
 
 
 class GeminiChat:
@@ -179,7 +177,6 @@ def build_chat_model(role: ChatRole, settings: Settings) -> ChatModel:
             api_key=settings.gemini_api_key.get_secret_value(),
             model=model_id,
         )
-
     if provider == "anthropic":
         if settings.anthropic_api_key is None:
             msg = (
@@ -191,7 +188,9 @@ def build_chat_model(role: ChatRole, settings: Settings) -> ChatModel:
             api_key=settings.anthropic_api_key.get_secret_value(),
             model=model_id,
         )
-
+    # Defensive — `provider` is Literal["gemini", "anthropic"] so this is
+    # unreachable. mypy via `assert_never`; the explicit raise keeps
+    # CodeQL's py/mixed-returns happy without changing behavior.
     assert_never(provider)
 
 
@@ -213,5 +212,6 @@ def parse_router_intent(raw: str) -> str:
             if isinstance(obj, dict) and "intent" in obj:
                 text = str(obj["intent"]).strip().lower()
         except json.JSONDecodeError:
+            # Not JSON; fall through to the plain-text normalization below.
             pass
     return text.strip("\"'`. \t\n")
