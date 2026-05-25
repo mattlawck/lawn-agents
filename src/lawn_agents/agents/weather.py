@@ -28,9 +28,6 @@ if TYPE_CHECKING:
 
     from lawn_agents.config import AppConfig
 
-# Callable thunk used by `_try` for uniform exception handling.
-type _Thunk[T] = "Callable[[], T]"
-
 NWS_BASE_URL = "https://api.weather.gov"
 FROST_THRESHOLD_F = 32.0
 FORECAST_DAYS = 7
@@ -247,7 +244,7 @@ def _parse_forecast(
     return highs, lows, pop
 
 
-def _try[T](fn: _Thunk[T], label: str, errors: list[str]) -> T | None:
+def _try[T](fn: Callable[[], T], label: str, errors: list[str]) -> T | None:
     """Run `fn`, return its result, or append a formatted error and return None."""
     try:
         return fn()

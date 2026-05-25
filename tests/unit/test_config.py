@@ -27,8 +27,13 @@ class TestSettingsLoader:
 
     def test_research_allowlist_contains_supersod(self, config_yaml_path: Path) -> None:
         settings = Settings.load(config_yaml_path)
-        assert "info.supersod.com" in settings.app.research.domain_allowlist
-        assert "hgic.clemson.edu" in settings.app.research.domain_allowlist
+        # `issubset` is set-to-set comparison, not a substring check —
+        # avoids tripping CodeQL's py/incomplete-url-substring-sanitization
+        # rule, which flags any `"<url-like-string>" in X` pattern
+        # regardless of X's type.
+        required = {"info.supersod.com", "hgic.clemson.edu"}
+        allowed = set(settings.app.research.domain_allowlist)
+        assert required.issubset(allowed)
 
     def test_provider_and_models_pinned(self, config_yaml_path: Path) -> None:
         settings = Settings.load(config_yaml_path)

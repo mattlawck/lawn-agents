@@ -19,7 +19,6 @@ class Sink(Protocol):
 
     def emit(self, recommendation: Recommendation) -> None:
         """Render the recommendation. Must never raise."""
-        ...
 
 
 def build_sinks(config: AppConfig) -> list[Sink]:

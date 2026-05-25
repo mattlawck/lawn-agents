@@ -30,8 +30,6 @@ if TYPE_CHECKING:
 
     from lawn_agents.config import AppConfig
 
-type _Thunk[T] = "Callable[[], T]"
-
 AWDB_BASE_URL = "https://wcc.sc.egov.usda.gov/awdbRestApi/services/v1"
 MAX_STATION_RADIUS_MI = 100.0
 HISTORY_DAYS = 7
@@ -256,7 +254,7 @@ def _haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> floa
     return 2 * r_mi * asin(sqrt(a))
 
 
-def _try[T](fn: _Thunk[T], label: str, errors: list[str]) -> T | None:
+def _try[T](fn: Callable[[], T], label: str, errors: list[str]) -> T | None:
     """Run `fn`, return its result, or append a formatted error and return None."""
     try:
         return fn()
