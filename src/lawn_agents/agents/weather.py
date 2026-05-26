@@ -198,9 +198,7 @@ class _ForecastAggregates:
     highs: defaultdict[str, float] = field(
         default_factory=lambda: defaultdict(lambda: float("-inf"))
     )
-    lows: defaultdict[str, float] = field(
-        default_factory=lambda: defaultdict(lambda: float("inf"))
-    )
+    lows: defaultdict[str, float] = field(default_factory=lambda: defaultdict(lambda: float("inf")))
     pop_max: defaultdict[str, float] = field(default_factory=lambda: defaultdict(float))
     pop_seen: defaultdict[str, bool] = field(default_factory=lambda: defaultdict(bool))
 
