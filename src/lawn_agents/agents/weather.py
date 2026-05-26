@@ -14,7 +14,7 @@ recommending based on N-day history instead").
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -190,6 +190,77 @@ def _fetch_precip_window_in(client: httpx.Client, station_id: str, *, hours: int
     return _mm_to_in(total_mm)
 
 
+@dataclass(slots=True)
+class _ForecastAggregates:
+    """Per-date aggregates accumulated while scanning NWS forecast periods."""
+
+    ordered_dates: list[str] = field(default_factory=list)
+    highs: defaultdict[str, float] = field(
+        default_factory=lambda: defaultdict(lambda: float("-inf"))
+    )
+    lows: defaultdict[str, float] = field(
+        default_factory=lambda: defaultdict(lambda: float("inf"))
+    )
+    pop_max: defaultdict[str, float] = field(default_factory=lambda: defaultdict(float))
+    pop_seen: defaultdict[str, bool] = field(default_factory=lambda: defaultdict(bool))
+
+
+def _period_temp_f(period: dict[str, Any]) -> tuple[str, float, bool] | None:
+    """Extract (date_key, temp_f, is_daytime) from a period, or None if malformed."""
+    start = period.get("startTime")
+    temp = period.get("temperature")
+    if not isinstance(start, str) or not isinstance(temp, int | float):
+        return None
+    unit = period.get("temperatureUnit", "F")
+    temp_f = float(temp) if unit == "F" else _c_to_f(float(temp))
+    return start[:10], temp_f, bool(period.get("isDaytime"))
+
+
+def _period_pop(period: dict[str, Any]) -> float | None:
+    """Extract probabilityOfPrecipitation.value from a period, or None."""
+    pop = (period.get("probabilityOfPrecipitation") or {}).get("value")
+    return float(pop) if isinstance(pop, int | float) else None
+
+
+def _ingest_period(period: dict[str, Any], agg: _ForecastAggregates) -> None:
+    """Fold one forecast period into the running aggregates."""
+    parsed = _period_temp_f(period)
+    if parsed is None:
+        return
+    date_key, temp_f, is_daytime = parsed
+    if date_key not in agg.ordered_dates:
+        agg.ordered_dates.append(date_key)
+    if is_daytime:
+        agg.highs[date_key] = max(agg.highs[date_key], temp_f)
+    else:
+        agg.lows[date_key] = min(agg.lows[date_key], temp_f)
+    pop = _period_pop(period)
+    if pop is not None:
+        # Day's max so a 70% pop window isn't washed out by an adjacent
+        # 0% window in the same date bucket.
+        agg.pop_max[date_key] = max(agg.pop_max[date_key], pop)
+        agg.pop_seen[date_key] = True
+
+
+def _emit_daily_lists(
+    agg: _ForecastAggregates,
+) -> tuple[list[float], list[float], list[float]]:
+    """Walk the date order and produce (highs, lows, precip-chance) lists."""
+    highs: list[float] = []
+    lows: list[float] = []
+    pop: list[float] = []
+    for date_key in agg.ordered_dates[:FORECAST_DAYS]:
+        high = agg.highs.get(date_key, float("-inf"))
+        if high != float("-inf"):
+            highs.append(round(high, 1))
+        low = agg.lows.get(date_key, float("inf"))
+        if low != float("inf"):
+            lows.append(round(low, 1))
+        if agg.pop_seen.get(date_key):
+            pop.append(round(agg.pop_max[date_key], 1))
+    return highs, lows, pop
+
+
 def _parse_forecast(
     forecast_data: dict[str, Any] | None,
 ) -> tuple[list[float], list[float], list[float]]:
@@ -199,49 +270,10 @@ def _parse_forecast(
     periods = forecast_data.get("properties", {}).get("periods", [])
     if not periods:
         return [], [], []
-
-    by_date_high: dict[str, float] = defaultdict(lambda: float("-inf"))
-    by_date_low: dict[str, float] = defaultdict(lambda: float("inf"))
-    by_date_pop: dict[str, float] = defaultdict(float)
-    seen_pop: dict[str, bool] = defaultdict(bool)
-    ordered_dates: list[str] = []
-
+    agg = _ForecastAggregates()
     for period in periods:
-        start = period.get("startTime")
-        temp = period.get("temperature")
-        unit = period.get("temperatureUnit", "F")
-        if not isinstance(start, str) or not isinstance(temp, int | float):
-            continue
-        date_key = start[:10]
-        if date_key not in ordered_dates:
-            ordered_dates.append(date_key)
-
-        temp_f = float(temp) if unit == "F" else _c_to_f(float(temp))
-        if period.get("isDaytime"):
-            by_date_high[date_key] = max(by_date_high[date_key], temp_f)
-        else:
-            by_date_low[date_key] = min(by_date_low[date_key], temp_f)
-
-        pop_value = (period.get("probabilityOfPrecipitation") or {}).get("value")
-        if isinstance(pop_value, int | float):
-            # Take the day's max so a 70% pop window isn't washed out by an
-            # adjacent 0% window in the same date bucket.
-            by_date_pop[date_key] = max(by_date_pop[date_key], float(pop_value))
-            seen_pop[date_key] = True
-
-    highs: list[float] = []
-    lows: list[float] = []
-    pop: list[float] = []
-    for date_key in ordered_dates[:FORECAST_DAYS]:
-        high = by_date_high.get(date_key, float("-inf"))
-        low = by_date_low.get(date_key, float("inf"))
-        if high != float("-inf"):
-            highs.append(round(high, 1))
-        if low != float("inf"):
-            lows.append(round(low, 1))
-        if seen_pop.get(date_key):
-            pop.append(round(by_date_pop[date_key], 1))
-    return highs, lows, pop
+        _ingest_period(period, agg)
+    return _emit_daily_lists(agg)
 
 
 def _try[T](fn: Callable[[], T], label: str, errors: list[str]) -> T | None:
