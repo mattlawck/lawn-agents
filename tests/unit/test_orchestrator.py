@@ -15,6 +15,7 @@ from lawn_agents.models import (
     CalendarItem,
     ChemicalCategory,
     Citation,
+    DroughtSnapshot,
     GeneralCategory,
     Passage,
     Recommendation,
@@ -112,6 +113,14 @@ def _soil_snapshot() -> SoilSnapshot:
     )
 
 
+def _drought_snapshot(d_level: int = 3) -> DroughtSnapshot:
+    return DroughtSnapshot(
+        fetched_at=datetime(2026, 5, 23, 12, 0, tzinfo=UTC),
+        county_fips="45019",
+        d_level=d_level,
+    )
+
+
 def _passage(*, content: str = "Apply pre-emergent at 55F.") -> Passage:
     return Passage(
         content=content,
@@ -137,15 +146,18 @@ def _injectables(
     synthesizer: FakeChatModel | None = None,
     weather_snap: WeatherSnapshot | None | object = ...,
     soil_snap: SoilSnapshot | None | object = ...,
+    drought_snap: DroughtSnapshot | None | object = ...,
     passages: list[Passage] | None = None,
 ) -> dict[str, Any]:
     weather_value = _weather_snapshot() if weather_snap is ... else weather_snap
     soil_value = _soil_snapshot() if soil_snap is ... else soil_snap
+    drought_value = _drought_snapshot() if drought_snap is ... else drought_snap
     return {
         "router": router,
         "synthesizer": synthesizer,
         "weather_fn": lambda _c: weather_value,
         "soil_fn": lambda _c: soil_value,
+        "drought_fn": lambda _c: drought_value,
         "retrieve_fn": lambda _q, _c: list(passages or [_passage()]),
     }
 
@@ -325,11 +337,29 @@ class TestAnswerDegradesOnFetchFailures:
             synthesizer=synth,
             weather_fn=lambda _c: _weather_snapshot(),
             soil_fn=lambda _c: _soil_snapshot(),
+            drought_fn=lambda _c: _drought_snapshot(),
             retrieve_fn=boom,
         )
         assert result.refused is False
         _, prompt = synth.structured_calls[0]
         assert "no relevant passages retrieved" in prompt
+
+    def test_drought_snapshot_reaches_prompt(self, settings: Settings) -> None:
+        rec = _good_recommendation()
+        synth = FakeChatModel(structured_responses=[rec])
+        orchestrator.answer(
+            "Should I fertilize?",
+            settings,
+            **_injectables(
+                router=FakeChatModel(text_response="ad-hoc"),
+                synthesizer=synth,
+                drought_snap=_drought_snapshot(d_level=3),
+            ),
+        )
+        _, prompt = synth.structured_calls[0]
+        # d_level 3 (extreme drought) should appear in the conditions JSON.
+        assert '"d_level": 3' in prompt
+        assert "45019" in prompt  # county_fips
 
 
 class TestScheduledCheck:

@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import ValidationError
 
-from lawn_agents.agents import knowledge, soiltemp, weather
+from lawn_agents.agents import drought, knowledge, soiltemp, weather
 from lawn_agents.llm import build_chat_model, parse_router_intent
 from lawn_agents.logging import get_logger
 from lawn_agents.models import Conditions, Recommendation
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
     from lawn_agents.config import AppConfig, Settings
     from lawn_agents.llm import ChatModel
-    from lawn_agents.models import Passage, SoilSnapshot, WeatherSnapshot
+    from lawn_agents.models import DroughtSnapshot, Passage, SoilSnapshot, WeatherSnapshot
 
 log = get_logger(__name__)
 
@@ -84,6 +84,7 @@ def answer(
     synthesizer: ChatModel | None = None,
     weather_fn: Callable[[AppConfig], WeatherSnapshot | None] | None = None,
     soil_fn: Callable[[AppConfig], SoilSnapshot | None] | None = None,
+    drought_fn: Callable[[AppConfig], DroughtSnapshot | None] | None = None,
     retrieve_fn: Callable[[str, AppConfig], list[Passage]] | None = None,
 ) -> Recommendation:
     """Run the full ad-hoc-question pipeline.
@@ -95,6 +96,7 @@ def answer(
         synthesizer: Override for the synthesizer `ChatModel` (tests).
         weather_fn: Override for the weather fetcher (tests).
         soil_fn: Override for the soil-temp fetcher (tests).
+        drought_fn: Override for the drought fetcher (tests).
         retrieve_fn: Override for the RAG retrieval call (tests).
 
     Returns:
@@ -106,6 +108,7 @@ def answer(
     synthesizer_chat = synthesizer or build_chat_model("synthesizer", settings)
     wfn: Callable[[AppConfig], WeatherSnapshot | None] = weather_fn or weather.snapshot
     sfn: Callable[[AppConfig], SoilSnapshot | None] = soil_fn or soiltemp.snapshot
+    dfn: Callable[[AppConfig], DroughtSnapshot | None] = drought_fn or drought.snapshot
     rfn: Callable[[str, AppConfig], list[Passage]] = retrieve_fn or knowledge.retrieve
 
     intent = route_intent(question, settings, router=router_chat)
@@ -117,7 +120,7 @@ def answer(
             "Trees, palms, and shrubs are planned for a later phase."
         )
 
-    conditions = _fetch_conditions(settings.app, wfn, sfn)
+    conditions = _fetch_conditions(settings.app, wfn, sfn, dfn)
     passages = _safe_retrieve(question, settings.app, rfn)
 
     return _synthesize_with_guardrail(
@@ -136,6 +139,7 @@ def scheduled_check(
     synthesizer: ChatModel | None = None,
     weather_fn: Callable[[AppConfig], WeatherSnapshot | None] | None = None,
     soil_fn: Callable[[AppConfig], SoilSnapshot | None] | None = None,
+    drought_fn: Callable[[AppConfig], DroughtSnapshot | None] | None = None,
     retrieve_fn: Callable[[str, AppConfig], list[Passage]] | None = None,
 ) -> Recommendation:
     """Run the weekly scheduled-check workflow.
@@ -153,6 +157,7 @@ def scheduled_check(
         synthesizer=synthesizer,
         weather_fn=weather_fn,
         soil_fn=soil_fn,
+        drought_fn=drought_fn,
         retrieve_fn=retrieve_fn,
     )
 
@@ -173,13 +178,15 @@ def _fetch_conditions(
     config: AppConfig,
     weather_fn: Callable[[AppConfig], WeatherSnapshot | None],
     soil_fn: Callable[[AppConfig], SoilSnapshot | None],
+    drought_fn: Callable[[AppConfig], DroughtSnapshot | None],
 ) -> Conditions:
     weather_snap = _safe_call(lambda: weather_fn(config), "weather.snapshot")
     soil_snap = _safe_call(lambda: soil_fn(config), "soiltemp.snapshot")
+    drought_snap = _safe_call(lambda: drought_fn(config), "drought.snapshot")
     return Conditions(
         weather=weather_snap,
         soil=soil_snap,
-        drought=None,  # drought.snapshot lands with the annual planner (task #17)
+        drought=drought_snap,
         as_of=datetime.now(UTC),
     )
 
