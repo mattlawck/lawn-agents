@@ -26,7 +26,10 @@ repos:
     hooks:
       - id: mypy
         name: mypy (strict)
-        entry: uv run mypy
+        # Resolve mypy via the project venv so the hook works whether or
+        # not `uv` is on PATH. Devs using uv: `make dev` keeps things
+        # consistent and the venv path is the canonical entry point.
+        entry: .venv/bin/mypy
         language: system
         types: [python]
         pass_filenames: false
