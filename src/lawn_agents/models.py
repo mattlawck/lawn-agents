@@ -112,12 +112,16 @@ class WeatherSnapshot(BaseModel):
     forecast_high_7d_f: list[float] = Field(default_factory=list)
     forecast_low_7d_f: list[float] = Field(default_factory=list)
     forecast_precip_chance_7d: list[float] = Field(default_factory=list)
+    forecast_max_wind_mph_7d: list[float] = Field(
+        default_factory=list,
+        description="Per-day max wind speed in mph (max across day + night periods).",
+    )
     frost_risk_next_7d: bool = False
     errors: list[str] = Field(default_factory=list)
 
 
 class SoilSnapshot(BaseModel):
-    """Soil temperature from USDA-NRCS AWDB (SCAN) or the modeled fallback."""
+    """Soil temperature + moisture from USDA-NRCS AWDB (SCAN) or modeled fallback."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -130,6 +134,10 @@ class SoilSnapshot(BaseModel):
     current_2in_f: float | None = None
     current_4in_f: float | None = None
     trailing_7d_4in_f: list[float] = Field(default_factory=list)
+    # SCAN reports SMS as volumetric water content percent (0..50ish).
+    current_2in_moisture_pct: float | None = None
+    current_4in_moisture_pct: float | None = None
+    trailing_7d_4in_moisture_pct: list[float] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
 
 

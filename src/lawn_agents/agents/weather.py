@@ -13,6 +13,7 @@ recommending based on N-day history instead").
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -86,14 +87,20 @@ def snapshot(config: AppConfig) -> WeatherSnapshot | None:
         )
 
         precip_24h_in: float | None = None
+        precip_7d_in: float | None = None
         if observation is not None:
             precip_24h_in = _try(
                 lambda: _fetch_precip_window_in(client, observation.station_id, hours=24),
                 "24h precip fetch",
                 errors,
             )
+            precip_7d_in = _try(
+                lambda: _fetch_precip_window_in(client, observation.station_id, hours=24 * 7),
+                "7d precip fetch",
+                errors,
+            )
 
-    highs, lows, pop = _parse_forecast(forecast_data)
+    highs, lows, pop, winds = _parse_forecast(forecast_data)
     frost_risk = any(t is not None and t <= FROST_THRESHOLD_F for t in lows)
     current_temp = observation.current_temp_f if observation is not None else None
     station_id = observation.station_id if observation is not None else None
@@ -103,10 +110,11 @@ def snapshot(config: AppConfig) -> WeatherSnapshot | None:
         station_id=station_id,
         current_temp_f=current_temp,
         last_24h_precip_in=precip_24h_in,
-        last_7d_precip_in=None,
+        last_7d_precip_in=precip_7d_in,
         forecast_high_7d_f=highs,
         forecast_low_7d_f=lows,
         forecast_precip_chance_7d=pop,
+        forecast_max_wind_mph_7d=winds,
         frost_risk_next_7d=frost_risk,
         errors=errors,
     )
@@ -163,7 +171,7 @@ def _fetch_latest_observation(client: httpx.Client, gridpoint: _Gridpoint) -> _O
     obs_data = _fetch_json(client, f"/stations/{station_id}/observations/latest")
     temp_props = obs_data["properties"].get("temperature", {}) or {}
     temp_value = temp_props.get("value")
-    current_f = _c_to_f(temp_value) if isinstance(temp_value, (int, float)) else None
+    current_f = _c_to_f(temp_value) if isinstance(temp_value, int | float) else None
     return _Observation(station_id=station_id, current_temp_f=current_f)
 
 
@@ -201,6 +209,8 @@ class _ForecastAggregates:
     lows: defaultdict[str, float] = field(default_factory=lambda: defaultdict(lambda: float("inf")))
     pop_max: defaultdict[str, float] = field(default_factory=lambda: defaultdict(float))
     pop_seen: defaultdict[str, bool] = field(default_factory=lambda: defaultdict(bool))
+    wind_max: defaultdict[str, float] = field(default_factory=lambda: defaultdict(float))
+    wind_seen: defaultdict[str, bool] = field(default_factory=lambda: defaultdict(bool))
 
 
 def _period_temp_f(period: dict[str, Any]) -> tuple[str, float, bool] | None:
@@ -218,6 +228,23 @@ def _period_pop(period: dict[str, Any]) -> float | None:
     """Extract probabilityOfPrecipitation.value from a period, or None."""
     pop = (period.get("probabilityOfPrecipitation") or {}).get("value")
     return float(pop) if isinstance(pop, int | float) else None
+
+
+def _period_max_wind_mph(period: dict[str, Any]) -> float | None:
+    """Extract the max wind speed in mph from an NWS period's `windSpeed` string.
+
+    NWS reports wind as strings like `"5 mph"`, `"5 to 10 mph"`, or
+    `"10 to 15 mph"`. We take the largest integer present — the upper
+    bound of the forecast range — since that's what matters for spray
+    decisions.
+    """
+    raw = period.get("windSpeed")
+    if not isinstance(raw, str):
+        return None
+    nums = re.findall(r"\d+", raw)
+    if not nums:
+        return None
+    return float(max(int(n) for n in nums))
 
 
 def _ingest_period(period: dict[str, Any], agg: _ForecastAggregates) -> None:
@@ -238,15 +265,20 @@ def _ingest_period(period: dict[str, Any], agg: _ForecastAggregates) -> None:
         # 0% window in the same date bucket.
         agg.pop_max[date_key] = max(agg.pop_max[date_key], pop)
         agg.pop_seen[date_key] = True
+    wind = _period_max_wind_mph(period)
+    if wind is not None:
+        agg.wind_max[date_key] = max(agg.wind_max[date_key], wind)
+        agg.wind_seen[date_key] = True
 
 
 def _emit_daily_lists(
     agg: _ForecastAggregates,
-) -> tuple[list[float], list[float], list[float]]:
-    """Walk the date order and produce (highs, lows, precip-chance) lists."""
+) -> tuple[list[float], list[float], list[float], list[float]]:
+    """Walk the date order and produce (highs, lows, pop, wind) lists."""
     highs: list[float] = []
     lows: list[float] = []
     pop: list[float] = []
+    winds: list[float] = []
     for date_key in agg.ordered_dates[:FORECAST_DAYS]:
         high = agg.highs.get(date_key, float("-inf"))
         if high != float("-inf"):
@@ -256,18 +288,20 @@ def _emit_daily_lists(
             lows.append(round(low, 1))
         if agg.pop_seen.get(date_key):
             pop.append(round(agg.pop_max[date_key], 1))
-    return highs, lows, pop
+        if agg.wind_seen.get(date_key):
+            winds.append(round(agg.wind_max[date_key], 1))
+    return highs, lows, pop, winds
 
 
 def _parse_forecast(
     forecast_data: dict[str, Any] | None,
-) -> tuple[list[float], list[float], list[float]]:
-    """Return (highs, lows, precip-chance) lists of length up to FORECAST_DAYS."""
+) -> tuple[list[float], list[float], list[float], list[float]]:
+    """Return (highs, lows, precip-chance, max-wind) lists up to FORECAST_DAYS."""
     if forecast_data is None:
-        return [], [], []
+        return [], [], [], []
     periods = forecast_data.get("properties", {}).get("periods", [])
     if not periods:
-        return [], [], []
+        return [], [], [], []
     agg = _ForecastAggregates()
     for period in periods:
         _ingest_period(period, agg)
