@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 from typing import Final
 
-from lawn_agents import __version__
-from lawn_agents.config import DEFAULT_CONFIG_PATH
+from lawn_agents import __version__, notify, orchestrator
+from lawn_agents.config import DEFAULT_CONFIG_PATH, Settings
 from lawn_agents.logging import configure as configure_logging
+from lawn_agents.logging import get_logger
 
 EXIT_OK: Final = 0
 EXIT_USAGE: Final = 2
 EXIT_RUNTIME: Final = 1
+
+log = get_logger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,8 +28,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument(
         "--config",
-        type=str,
-        default=str(DEFAULT_CONFIG_PATH),
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
         help="Path to config.yaml (default: ./config.yaml).",
     )
 
@@ -70,10 +74,63 @@ def cli(argv: list[str] | None = None) -> int:
     """
     configure_logging()
     parser = build_parser()
-    parser.parse_args(argv)
-    # Phase 1 implementation lands in subsequent tasks; for now,
-    # successful argparse is the only behavior under test.
-    return EXIT_OK
+    args = parser.parse_args(argv)
+
+    try:
+        settings = Settings.load(args.config)
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except Exception as exc:
+        print(f"error loading config: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    sinks = notify.build_sinks(settings.app)
+
+    try:
+        return _dispatch(args, settings, sinks)
+    except Exception as exc:
+        log.error("cli.unexpected_failure", error=str(exc), error_type=type(exc).__name__)
+        print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+
+
+def _dispatch(
+    args: argparse.Namespace,
+    settings: Settings,
+    sinks: list[notify.Sink],
+) -> int:
+    if args.ask:
+        rec = orchestrator.answer(args.ask, settings)
+    elif args.scheduled:
+        rec = orchestrator.scheduled_check(settings)
+    elif args.plan_month is not None:
+        print(
+            f"--plan-month {args.plan_month}: not yet implemented "
+            "(annual planner lands with the drought-aware planning PR — task #17).",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME
+    elif args.plan_year is not None:
+        print(
+            f"--plan-year {args.plan_year}: not yet implemented "
+            "(annual planner lands with the drought-aware planning PR — task #17).",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME
+    elif args.review_additions:
+        print(
+            "--review-additions: not yet implemented "
+            "(lands with the research subagent PR — task #16).",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME
+    else:  # pragma: no cover — argparse enforces required mutually-exclusive group
+        return EXIT_USAGE
+
+    for sink in sinks:
+        sink.emit(rec)
+    return EXIT_RUNTIME if rec.refused else EXIT_OK
 
 
 if __name__ == "__main__":  # pragma: no cover
