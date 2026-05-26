@@ -21,7 +21,9 @@ uv run pre-commit install
 # 5. Make your change on a feature branch.
 git checkout -b feat/your-thing
 
-# 6. Verify locally before pushing.
+# 6. Verify locally before pushing — `make check` runs the exact CI gates.
+make check
+# Or, without make:
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy
