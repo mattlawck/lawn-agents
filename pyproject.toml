@@ -44,6 +44,7 @@ dependencies = [
     "lancedb>=0.16",
     "sentence-transformers>=3.3",
     "pypdf>=5.1",
+    "trafilatura>=2.0",
 ]
 
 [project.optional-dependencies]
