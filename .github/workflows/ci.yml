@@ -22,7 +22,7 @@ jobs:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -75,7 +75,7 @@ jobs:
       (github.event.pull_request.head.repo.fork == false &&
        github.actor != 'dependabot[bot]')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # Sonar wants full history for better blame / new-code detection.
           fetch-depth: 0
