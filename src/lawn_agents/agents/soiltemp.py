@@ -15,7 +15,7 @@ API reference: https://wcc.sc.egov.usda.gov/awdbRestApi/swagger-ui/index.html
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from math import asin, cos, radians, sin, sqrt
 from typing import TYPE_CHECKING, Any
@@ -102,15 +102,18 @@ def snapshot(config: AppConfig) -> SoilSnapshot | None:
             errors,
         )
 
-    current_2in, current_4in, trailing_4in = _parse_data(payload)
+    parsed = _parse_data(payload)
 
     return SoilSnapshot(
         fetched_at=fetched_at,
         station_id=station.triplet,
         modeled=False,
-        current_2in_f=current_2in,
-        current_4in_f=current_4in,
-        trailing_7d_4in_f=trailing_4in,
+        current_2in_f=parsed.temp_2in,
+        current_4in_f=parsed.temp_4in,
+        trailing_7d_4in_f=parsed.trail_temp_4in,
+        current_2in_moisture_pct=parsed.moisture_2in,
+        current_4in_moisture_pct=parsed.moisture_4in,
+        trailing_7d_4in_moisture_pct=parsed.trail_moisture_4in,
         errors=errors,
     )
 
@@ -173,12 +176,25 @@ def _find_nearest_scan_station(
     return best
 
 
+@dataclass(slots=True, frozen=True)
+class _ParsedSoilData:
+    """Decomposed soil-data block: temps at 2/4 inch + moisture at 2/4 inch."""
+
+    temp_2in: float | None = None
+    temp_4in: float | None = None
+    trail_temp_4in: list[float] = field(default_factory=list)
+    moisture_2in: float | None = None
+    moisture_4in: float | None = None
+    trail_moisture_4in: list[float] = field(default_factory=list)
+
+
 def _fetch_sto_data(client: httpx.Client, triplet: str) -> list[dict[str, Any]]:
-    """Fetch daily STO values at 2" and 4" depth for the last week.
+    """Fetch daily STO + SMS values at 2" and 4" depth for the last week.
 
     AWDB element format: `elementCode:heightDepth:ordinal`. We request
-    ordinal=1 (primary sensor); some stations have redundant sensors at
-    higher ordinals.
+    ordinal=1 (primary sensor) for both Soil Temperature Observed (STO)
+    and Soil Moisture (SMS). SMS is reported as volumetric water content
+    percent (~0..50).
     """
     end = date.today()
     start = end - timedelta(days=HISTORY_DAYS)
@@ -186,7 +202,9 @@ def _fetch_sto_data(client: httpx.Client, triplet: str) -> list[dict[str, Any]]:
         "/data",
         params={
             "stationTriplets": triplet,
-            "elements": f"STO:{DEPTH_2IN}:1,STO:{DEPTH_4IN}:1",
+            "elements": (
+                f"STO:{DEPTH_2IN}:1,STO:{DEPTH_4IN}:1,SMS:{DEPTH_2IN}:1,SMS:{DEPTH_4IN}:1"
+            ),
             "duration": "DAILY",
             "beginDate": start.isoformat(),
             "endDate": end.isoformat(),
@@ -197,33 +215,49 @@ def _fetch_sto_data(client: httpx.Client, triplet: str) -> list[dict[str, Any]]:
     return payload
 
 
-def _parse_data(
-    payload: list[dict[str, Any]] | None,
-) -> tuple[float | None, float | None, list[float]]:
-    """Pull out current 2"/4" values and the trailing 7d at 4" depth."""
+def _parse_data(payload: list[dict[str, Any]] | None) -> _ParsedSoilData:
+    """Pull out current 2"/4" temps + moisture and trailing-7d at 4" depth."""
     if not payload:
-        return None, None, []
+        return _ParsedSoilData()
 
     station_blocks = payload[0].get("data", []) if payload else []
-    current_2in: float | None = None
-    current_4in: float | None = None
-    trailing_4in: list[float] = []
+    temp_2in: float | None = None
+    temp_4in: float | None = None
+    trail_temp_4in: list[float] = []
+    moisture_2in: float | None = None
+    moisture_4in: float | None = None
+    trail_moisture_4in: list[float] = []
 
     for block in station_blocks:
         elem = block.get("stationElement", {}) or {}
         depth = elem.get("heightDepth")
+        element_code = elem.get("elementCode")
         values = block.get("values", []) or []
         if not values:
             continue
 
         latest = _latest_value(values)
-        if depth == DEPTH_2IN:
-            current_2in = latest
-        elif depth == DEPTH_4IN:
-            current_4in = latest
-            trailing_4in = _ordered_values(values)[-HISTORY_DAYS:]
+        if element_code == "STO":
+            if depth == DEPTH_2IN:
+                temp_2in = latest
+            elif depth == DEPTH_4IN:
+                temp_4in = latest
+                trail_temp_4in = _ordered_values(values)[-HISTORY_DAYS:]
+        elif element_code == "SMS":
+            if depth == DEPTH_2IN:
+                moisture_2in = latest
+            elif depth == DEPTH_4IN:
+                moisture_4in = latest
+                trail_moisture_4in = _ordered_values(values)[-HISTORY_DAYS:]
 
-    return current_2in, current_4in, trailing_4in
+    return _ParsedSoilData(
+        temp_2in=temp_2in,
+        temp_4in=temp_4in,
+        trail_temp_4in=trail_temp_4in,
+        moisture_2in=moisture_2in,
+        moisture_4in=moisture_4in,
+        trail_moisture_4in=trail_moisture_4in,
+    )
 
 
 def _latest_value(values: list[dict[str, Any]]) -> float | None:

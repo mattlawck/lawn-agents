@@ -50,14 +50,20 @@ NEAR_NON_SCAN_STATION = {
 }
 
 
-def _values_block(depth: int, values: list[dict[str, Any]]) -> dict[str, Any]:
+def _values_block(
+    depth: int,
+    values: list[dict[str, Any]],
+    *,
+    element_code: str = "STO",
+    stored_unit: str = "degF",
+) -> dict[str, Any]:
     return {
         "stationElement": {
-            "elementCode": "STO",
+            "elementCode": element_code,
             "ordinal": 1,
             "heightDepth": depth,
             "durationName": "DAILY",
-            "storedUnitCode": "degF",
+            "storedUnitCode": stored_unit,
         },
         "values": values,
     }
@@ -91,6 +97,30 @@ DATA_HAPPY_PATH = [
                     {"date": "2026-05-22", "value": 73},
                     {"date": "2026-05-23", "value": 74},
                     {"date": "2026-05-24", "value": 75},
+                ],
+            ),
+            _values_block(
+                depth=-2,
+                element_code="SMS",
+                stored_unit="pct",
+                values=[
+                    {"date": "2026-05-23", "value": 12.5},
+                    {"date": "2026-05-24", "value": 11.0},
+                ],
+            ),
+            _values_block(
+                depth=-4,
+                element_code="SMS",
+                stored_unit="pct",
+                values=[
+                    {"date": "2026-05-17", "value": 18.0},
+                    {"date": "2026-05-18", "value": 17.5},
+                    {"date": "2026-05-19", "value": 17.0},
+                    {"date": "2026-05-20", "value": 16.5},
+                    {"date": "2026-05-21", "value": 16.0},
+                    {"date": "2026-05-22", "value": 15.5},
+                    {"date": "2026-05-23", "value": 15.0},
+                    {"date": "2026-05-24", "value": 14.5},
                 ],
             ),
         ],
@@ -171,6 +201,18 @@ class TestSnapshotHappyPath:
         assert snap.current_4in_f == 75.0
         # Trailing window: last 7 daily values at 4-inch depth.
         assert snap.trailing_7d_4in_f == [69.0, 70.0, 71.0, 72.0, 73.0, 74.0, 75.0]
+        # Soil moisture from SMS elements.
+        assert snap.current_2in_moisture_pct == 11.0
+        assert snap.current_4in_moisture_pct == 14.5
+        assert snap.trailing_7d_4in_moisture_pct == [
+            17.5,
+            17.0,
+            16.5,
+            16.0,
+            15.5,
+            15.0,
+            14.5,
+        ]
 
 
 class TestStationFiltering:

@@ -34,6 +34,7 @@ FORECAST = {
                 "temperature": 78,
                 "temperatureUnit": "F",
                 "probabilityOfPrecipitation": {"value": 20},
+                "windSpeed": "5 to 10 mph",
             },
             {
                 "name": "Tonight",
@@ -42,6 +43,7 @@ FORECAST = {
                 "temperature": 62,
                 "temperatureUnit": "F",
                 "probabilityOfPrecipitation": {"value": 10},
+                "windSpeed": "5 mph",
             },
             {
                 "name": "Tomorrow",
@@ -50,6 +52,7 @@ FORECAST = {
                 "temperature": 82,
                 "temperatureUnit": "F",
                 "probabilityOfPrecipitation": {"value": 70},
+                "windSpeed": "15 to 20 mph",
             },
             {
                 "name": "Tomorrow Night",
@@ -59,6 +62,7 @@ FORECAST = {
                 "temperature": 30,
                 "temperatureUnit": "F",
                 "probabilityOfPrecipitation": {"value": 80},
+                "windSpeed": "10 mph",
             },
         ]
     }
@@ -172,8 +176,15 @@ class TestSnapshotHappyPath:
         assert snap.forecast_high_7d_f == [78.0, 82.0]
         assert snap.forecast_low_7d_f == [62.0, 30.0]
         assert snap.forecast_precip_chance_7d == [20.0, 80.0]
+        # Max wind per date: day1 max(10, 5) = 10; day2 max(20, 10) = 20.
+        assert snap.forecast_max_wind_mph_7d == [10.0, 20.0]
         # The 30 F low trips frost risk.
         assert snap.frost_risk_next_7d is True
+        # 7d precip pulls the same windowed obs as 24h since our mock
+        # handler doesn't filter by date; assert it's populated.
+        assert snap.last_7d_precip_in is not None
+        assert snap.last_24h_precip_in is not None
+        assert snap.last_7d_precip_in >= snap.last_24h_precip_in
 
 
 class TestPartialFailures:
@@ -284,6 +295,26 @@ class TestForecastParsing:
         assert snap is not None
         # 25 C -> 77 F.
         assert snap.forecast_high_7d_f == [77.0]
+
+
+class TestWindParsing:
+    """`_period_max_wind_mph` handles NWS's varied windSpeed strings."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("5 mph", 5.0),
+            ("5 to 10 mph", 10.0),
+            ("15 to 20 mph", 20.0),
+            ("Calm", None),
+            ("", None),
+            (None, None),
+            ({"value": 10}, None),  # non-string input
+        ],
+    )
+    def test_parses_max(self, raw: Any, expected: float | None) -> None:
+        period = {"windSpeed": raw}
+        assert weather._period_max_wind_mph(period) == expected
 
 
 class TestUserAgent:
