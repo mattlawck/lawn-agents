@@ -208,7 +208,9 @@ def _synthesize_plan_with_guardrail(
         return synthesizer.complete_structured(
             system=system, user=retry_user, response_model=Recommendation
         )
-    except (ValidationError, Exception) as exc:
+    except Exception as exc:
+        # `ValidationError` is a subclass of `Exception` — see the
+        # matching note in orchestrator._synthesize_with_guardrail.
         log.warning("planner.synthesizer_final_failure", error=str(exc))
         return _refusal(
             "planner output failed schema validation twice; refusing rather than "

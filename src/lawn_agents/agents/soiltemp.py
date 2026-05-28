@@ -176,9 +176,13 @@ def _find_nearest_scan_station(
     return best
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(slots=True)
 class _ParsedSoilData:
-    """Decomposed soil-data block: temps at 2/4 inch + moisture at 2/4 inch."""
+    """Decomposed soil-data block: temps at 2/4 inch + moisture at 2/4 inch.
+
+    Mutable so the parser can fill it in one block at a time without
+    threading a separate accumulator type.
+    """
 
     temp_2in: float | None = None
     temp_4in: float | None = None
@@ -217,47 +221,38 @@ def _fetch_sto_data(client: httpx.Client, triplet: str) -> list[dict[str, Any]]:
 
 def _parse_data(payload: list[dict[str, Any]] | None) -> _ParsedSoilData:
     """Pull out current 2"/4" temps + moisture and trailing-7d at 4" depth."""
+    parsed = _ParsedSoilData()
     if not payload:
-        return _ParsedSoilData()
+        return parsed
+    for block in payload[0].get("data", []) or []:
+        _apply_block(parsed, block)
+    return parsed
 
-    station_blocks = payload[0].get("data", []) if payload else []
-    temp_2in: float | None = None
-    temp_4in: float | None = None
-    trail_temp_4in: list[float] = []
-    moisture_2in: float | None = None
-    moisture_4in: float | None = None
-    trail_moisture_4in: list[float] = []
 
-    for block in station_blocks:
-        elem = block.get("stationElement", {}) or {}
-        depth = elem.get("heightDepth")
-        element_code = elem.get("elementCode")
-        values = block.get("values", []) or []
-        if not values:
-            continue
+def _apply_block(parsed: _ParsedSoilData, block: dict[str, Any]) -> None:
+    """Fold one stationElement block into `parsed`.
 
-        latest = _latest_value(values)
-        if element_code == "STO":
-            if depth == DEPTH_2IN:
-                temp_2in = latest
-            elif depth == DEPTH_4IN:
-                temp_4in = latest
-                trail_temp_4in = _ordered_values(values)[-HISTORY_DAYS:]
-        elif element_code == "SMS":
-            if depth == DEPTH_2IN:
-                moisture_2in = latest
-            elif depth == DEPTH_4IN:
-                moisture_4in = latest
-                trail_moisture_4in = _ordered_values(values)[-HISTORY_DAYS:]
+    Extracted from `_parse_data` so cognitive complexity stays under
+    SonarCloud's threshold — the per-element/depth chain is local here.
+    """
+    elem = block.get("stationElement", {}) or {}
+    code = elem.get("elementCode")
+    depth = elem.get("heightDepth")
+    values = block.get("values", []) or []
+    if not values:
+        return
 
-    return _ParsedSoilData(
-        temp_2in=temp_2in,
-        temp_4in=temp_4in,
-        trail_temp_4in=trail_temp_4in,
-        moisture_2in=moisture_2in,
-        moisture_4in=moisture_4in,
-        trail_moisture_4in=trail_moisture_4in,
-    )
+    latest = _latest_value(values)
+    if code == "STO" and depth == DEPTH_2IN:
+        parsed.temp_2in = latest
+    elif code == "STO" and depth == DEPTH_4IN:
+        parsed.temp_4in = latest
+        parsed.trail_temp_4in = _ordered_values(values)[-HISTORY_DAYS:]
+    elif code == "SMS" and depth == DEPTH_2IN:
+        parsed.moisture_2in = latest
+    elif code == "SMS" and depth == DEPTH_4IN:
+        parsed.moisture_4in = latest
+        parsed.trail_moisture_4in = _ordered_values(values)[-HISTORY_DAYS:]
 
 
 def _latest_value(values: list[dict[str, Any]]) -> float | None:

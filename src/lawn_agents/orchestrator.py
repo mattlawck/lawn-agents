@@ -245,7 +245,10 @@ def _synthesize_with_guardrail(
         return synthesizer.complete_structured(
             system=system, user=retry_user, response_model=Recommendation
         )
-    except (ValidationError, Exception) as exc:
+    except Exception as exc:
+        # `ValidationError` is a subclass of `Exception` — catching it
+        # alongside the parent here is redundant, so we just catch
+        # `Exception` and treat any failure as terminal for the guardrail.
         log.warning("orchestrator.synthesizer_final_failure", error=str(exc))
         return _refusal(
             "synthesizer output failed schema validation twice; refusing "
