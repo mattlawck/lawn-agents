@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import ValidationError
 
-from lawn_agents.agents import drought, knowledge, soiltemp, weather
+from lawn_agents.agents import drought, knowledge, research, soiltemp, weather
 from lawn_agents.llm import build_chat_model, parse_router_intent
 from lawn_agents.logging import get_logger
 from lawn_agents.models import Conditions, Recommendation
@@ -86,6 +86,7 @@ def answer(
     soil_fn: Callable[[AppConfig], SoilSnapshot | None] | None = None,
     drought_fn: Callable[[AppConfig], DroughtSnapshot | None] | None = None,
     retrieve_fn: Callable[[str, AppConfig], list[Passage]] | None = None,
+    research_fn: Callable[[str, AppConfig], list[Passage]] | None = None,
 ) -> Recommendation:
     """Run the full ad-hoc-question pipeline.
 
@@ -98,6 +99,9 @@ def answer(
         soil_fn: Override for the soil-temp fetcher (tests).
         drought_fn: Override for the drought fetcher (tests).
         retrieve_fn: Override for the RAG retrieval call (tests).
+        research_fn: Override for the research subagent (tests).
+            Defaults to `research.search_and_ingest`. Only called when
+            retrieval is weak AND `config.research.enabled` is true.
 
     Returns:
         A validated `Recommendation`. May be a refusal (`refused=True`)
@@ -110,6 +114,7 @@ def answer(
     sfn: Callable[[AppConfig], SoilSnapshot | None] = soil_fn or soiltemp.snapshot
     dfn: Callable[[AppConfig], DroughtSnapshot | None] = drought_fn or drought.snapshot
     rfn: Callable[[str, AppConfig], list[Passage]] = retrieve_fn or knowledge.retrieve
+    research_call: Callable[[str, AppConfig], list[Passage]] = research_fn or _default_research
 
     intent = route_intent(question, settings, router=router_chat)
     log.info("orchestrator.intent", intent=intent)
@@ -122,6 +127,12 @@ def answer(
 
     conditions = _fetch_conditions(settings.app, wfn, sfn, dfn)
     passages = _safe_retrieve(question, settings.app, rfn)
+
+    if settings.app.research.enabled and knowledge.is_weak(passages, settings.app):
+        log.info("orchestrator.retrieval_weak.invoking_research")
+        researched = _safe_research(question, settings.app, research_call)
+        if researched:
+            passages = researched
 
     return _synthesize_with_guardrail(
         question=question,
@@ -141,6 +152,7 @@ def scheduled_check(
     soil_fn: Callable[[AppConfig], SoilSnapshot | None] | None = None,
     drought_fn: Callable[[AppConfig], DroughtSnapshot | None] | None = None,
     retrieve_fn: Callable[[str, AppConfig], list[Passage]] | None = None,
+    research_fn: Callable[[str, AppConfig], list[Passage]] | None = None,
 ) -> Recommendation:
     """Run the weekly scheduled-check workflow.
 
@@ -159,6 +171,7 @@ def scheduled_check(
         soil_fn=soil_fn,
         drought_fn=drought_fn,
         retrieve_fn=retrieve_fn,
+        research_fn=research_fn,
     )
 
 
@@ -209,6 +222,23 @@ def _safe_retrieve(
     except Exception as exc:
         log.warning("orchestrator.retrieve_failed", error=str(exc))
         return []
+
+
+def _safe_research(
+    question: str,
+    config: AppConfig,
+    research_call: Callable[[str, AppConfig], list[Passage]],
+) -> list[Passage]:
+    try:
+        return research_call(question, config)
+    except Exception as exc:
+        log.warning("orchestrator.research_failed", error=str(exc))
+        return []
+
+
+def _default_research(question: str, config: AppConfig) -> list[Passage]:
+    """Thin wrapper so `research.search_and_ingest` matches the injectable signature."""
+    return research.search_and_ingest(question, config)
 
 
 def _synthesize_with_guardrail(

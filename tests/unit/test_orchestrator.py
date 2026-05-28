@@ -148,6 +148,7 @@ def _injectables(
     soil_snap: SoilSnapshot | None | object = ...,
     drought_snap: DroughtSnapshot | None | object = ...,
     passages: list[Passage] | None = None,
+    research_passages: list[Passage] | None = None,
 ) -> dict[str, Any]:
     weather_value = _weather_snapshot() if weather_snap is ... else weather_snap
     soil_value = _soil_snapshot() if soil_snap is ... else soil_snap
@@ -159,6 +160,10 @@ def _injectables(
         "soil_fn": lambda _c: soil_value,
         "drought_fn": lambda _c: drought_value,
         "retrieve_fn": lambda _q, _c: list(passages or [_passage()]),
+        # Default to a no-op research so tests don't accidentally hit
+        # the real DDGS search. Tests that want to exercise research
+        # pass `research_passages` explicitly.
+        "research_fn": lambda _q, _c: list(research_passages or []),
     }
 
 
@@ -339,6 +344,8 @@ class TestAnswerDegradesOnFetchFailures:
             soil_fn=lambda _c: _soil_snapshot(),
             drought_fn=lambda _c: _drought_snapshot(),
             retrieve_fn=boom,
+            # Empty research result keeps DDGS out of the unit test.
+            research_fn=lambda _q, _c: [],
         )
         assert result.refused is False
         _, prompt = synth.structured_calls[0]
@@ -375,3 +382,118 @@ class TestScheduledCheck:
         )
         assert result.refused is False
         assert "weekly" in synth.structured_calls[0][1].lower()
+
+
+class TestResearchInvocation:
+    """ADR 0005 — research subagent fires only on weak retrieval."""
+
+    def _weak_passage(self) -> Passage:
+        # Below the example config's weak_score_threshold (0.55).
+        return Passage(
+            content="vague-ish content",
+            score=0.30,
+            source_id="weak",
+            source_title="Weak",
+        )
+
+    def _researched_passage(self) -> Passage:
+        return Passage(
+            content="Fresh chunk from web research.",
+            score=0.78,
+            source_id="auto-2026-05",
+            source_title="Auto-researched source",
+            url="https://hgic.clemson.edu/x",
+            auto_ingested=True,
+            requires_review=True,
+        )
+
+    def test_research_fires_on_weak_retrieval(self, settings: Settings) -> None:
+        rec = _good_recommendation()
+        synth = FakeChatModel(structured_responses=[rec])
+        research_calls: list[str] = []
+
+        def fake_research(q: str, _c: Any) -> list[Passage]:
+            research_calls.append(q)
+            return [self._researched_passage()]
+
+        orchestrator.answer(
+            "what about grubex timing?",
+            settings,
+            router=FakeChatModel(text_response="ad-hoc"),
+            synthesizer=synth,
+            weather_fn=lambda _c: _weather_snapshot(),
+            soil_fn=lambda _c: _soil_snapshot(),
+            drought_fn=lambda _c: _drought_snapshot(),
+            retrieve_fn=lambda _q, _c: [self._weak_passage()],
+            research_fn=fake_research,
+        )
+        assert research_calls == ["what about grubex timing?"]
+        _, prompt = synth.structured_calls[0]
+        # Researched passage replaced the weak local result.
+        assert "Fresh chunk from web research." in prompt
+        assert "[unreviewed]" in prompt
+
+    def test_research_skipped_when_retrieval_is_strong(self, settings: Settings) -> None:
+        rec = _good_recommendation()
+        synth = FakeChatModel(structured_responses=[rec])
+        research_calls: list[str] = []
+
+        orchestrator.answer(
+            "any question",
+            settings,
+            **_injectables(
+                router=FakeChatModel(text_response="ad-hoc"),
+                synthesizer=synth,
+                research_passages=[self._researched_passage()],
+            ),
+        )
+        # Default _injectables uses score=0.82 (strong); research_fn is
+        # injected but never invoked.
+        assert research_calls == []
+
+    def test_research_skipped_when_disabled(
+        self, settings: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings.app.research, "enabled", False)
+        rec = _good_recommendation()
+        synth = FakeChatModel(structured_responses=[rec])
+        research_calls: list[str] = []
+
+        def fake_research(q: str, _c: Any) -> list[Passage]:
+            research_calls.append(q)
+            return [self._researched_passage()]
+
+        orchestrator.answer(
+            "any",
+            settings,
+            router=FakeChatModel(text_response="ad-hoc"),
+            synthesizer=synth,
+            weather_fn=lambda _c: _weather_snapshot(),
+            soil_fn=lambda _c: _soil_snapshot(),
+            drought_fn=lambda _c: _drought_snapshot(),
+            retrieve_fn=lambda _q, _c: [self._weak_passage()],
+            research_fn=fake_research,
+        )
+        assert research_calls == []
+
+    def test_research_exception_is_swallowed(self, settings: Settings) -> None:
+        rec = _good_recommendation()
+        synth = FakeChatModel(structured_responses=[rec])
+
+        def boom(_q: str, _c: Any) -> list[Passage]:
+            raise RuntimeError("ddgs is rate-limited")
+
+        result = orchestrator.answer(
+            "?",
+            settings,
+            router=FakeChatModel(text_response="ad-hoc"),
+            synthesizer=synth,
+            weather_fn=lambda _c: _weather_snapshot(),
+            soil_fn=lambda _c: _soil_snapshot(),
+            drought_fn=lambda _c: _drought_snapshot(),
+            retrieve_fn=lambda _q, _c: [self._weak_passage()],
+            research_fn=boom,
+        )
+        # Research failure doesn't abort synthesis — we just keep the
+        # weak passages and let the model decide.
+        assert result.refused is False
