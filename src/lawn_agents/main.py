@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Final
 
-from lawn_agents import __version__, notify, orchestrator
+from lawn_agents import __version__, notify, orchestrator, planner
 from lawn_agents.config import DEFAULT_CONFIG_PATH, Settings
 from lawn_agents.logging import configure as configure_logging
 from lawn_agents.logging import get_logger
@@ -105,19 +105,14 @@ def _dispatch(
     elif args.scheduled:
         rec = orchestrator.scheduled_check(settings)
     elif args.plan_month is not None:
-        print(
-            f"--plan-month {args.plan_month}: not yet implemented "
-            "(annual planner lands with the drought-aware planning PR — task #17).",
-            file=sys.stderr,
-        )
-        return EXIT_RUNTIME
+        try:
+            year, month = _parse_yyyy_mm(args.plan_month)
+        except ValueError as exc:
+            print(f"error: --plan-month {exc}", file=sys.stderr)
+            return EXIT_USAGE
+        rec = planner.plan_month(year, month, settings)
     elif args.plan_year is not None:
-        print(
-            f"--plan-year {args.plan_year}: not yet implemented "
-            "(annual planner lands with the drought-aware planning PR — task #17).",
-            file=sys.stderr,
-        )
-        return EXIT_RUNTIME
+        rec = planner.plan_year(args.plan_year, settings)
     elif args.review_additions:
         print(
             "--review-additions: not yet implemented "
@@ -131,6 +126,24 @@ def _dispatch(
     for sink in sinks:
         sink.emit(rec)
     return EXIT_RUNTIME if rec.refused else EXIT_OK
+
+
+def _parse_yyyy_mm(raw: str) -> tuple[int, int]:
+    """Parse a `YYYY-MM` string into a `(year, month)` tuple."""
+    parts = raw.split("-")
+    if len(parts) != 2:
+        msg = f"expected YYYY-MM, got {raw!r}"
+        raise ValueError(msg)
+    try:
+        year = int(parts[0])
+        month = int(parts[1])
+    except ValueError as exc:
+        msg = f"expected numeric YYYY-MM, got {raw!r}"
+        raise ValueError(msg) from exc
+    if not 1 <= month <= 12:
+        msg = f"month must be 1..12, got {month}"
+        raise ValueError(msg)
+    return year, month
 
 
 if __name__ == "__main__":  # pragma: no cover

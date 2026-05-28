@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from lawn_agents import notify, orchestrator
+from lawn_agents import notify, orchestrator, planner
 from lawn_agents.main import EXIT_OK, EXIT_RUNTIME, EXIT_USAGE, build_parser, cli
 from lawn_agents.models import Recommendation
 
@@ -120,15 +120,56 @@ class TestCliDispatch:
         assert "settings" in called
         assert len(emitted) == 1
 
-    def test_plan_month_not_yet_implemented(
+    def test_plan_month_dispatches_to_planner(
+        self,
+        cwd_with_example_config: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        emitted: list[Recommendation] = []
+        called: dict[str, Any] = {}
+
+        def fake_plan_month(year: int, month: int, _settings: Any) -> Recommendation:
+            called["year"] = year
+            called["month"] = month
+            return _good_rec()
+
+        monkeypatch.setattr(planner, "plan_month", fake_plan_month)
+        monkeypatch.setattr(notify, "build_sinks", lambda _c: [_RecordingSink(emitted)])
+
+        exit_code = cli(["--config", "config.example.yaml", "--plan-month", "2026-07"])
+        assert exit_code == EXIT_OK
+        assert called == {"year": 2026, "month": 7}
+        assert len(emitted) == 1
+
+    def test_plan_month_bad_format_returns_usage_error(
         self,
         cwd_with_example_config: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        exit_code = cli(["--config", "config.example.yaml", "--plan-month", "2026-07"])
-        assert exit_code == EXIT_RUNTIME
+        exit_code = cli(["--config", "config.example.yaml", "--plan-month", "nope"])
+        assert exit_code == EXIT_USAGE
         err = capsys.readouterr().err
-        assert "not yet implemented" in err.lower()
+        assert "--plan-month" in err
+
+    def test_plan_year_dispatches_to_planner(
+        self,
+        cwd_with_example_config: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        emitted: list[Recommendation] = []
+        called: dict[str, Any] = {}
+
+        def fake_plan_year(year: int, _settings: Any) -> Recommendation:
+            called["year"] = year
+            return _good_rec()
+
+        monkeypatch.setattr(planner, "plan_year", fake_plan_year)
+        monkeypatch.setattr(notify, "build_sinks", lambda _c: [_RecordingSink(emitted)])
+
+        exit_code = cli(["--config", "config.example.yaml", "--plan-year", "2026"])
+        assert exit_code == EXIT_OK
+        assert called == {"year": 2026}
+        assert len(emitted) == 1
 
     def test_missing_config_returns_usage_error(
         self,
