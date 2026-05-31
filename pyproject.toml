@@ -45,6 +45,7 @@ dependencies = [
     "sentence-transformers>=3.3",
     "pypdf>=5.1",
     "trafilatura>=2.0",
+    "ddgs>=9.0",
 ]
 
 [project.optional-dependencies]
