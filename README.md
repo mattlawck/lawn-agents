@@ -14,33 +14,42 @@ every chemical recommendation.
 
 ## Status
 
-Phase 1 — Zeon Zoysia advisory (in development). Phase 2 will add live oaks,
-palms, hydrangeas, and other shrubs.
+**Phase 1 is feature-complete.** Zeon Zoysia advisory ships ad-hoc Q&A
+(`--ask`), weekly scheduled checks (`--scheduled`), monthly and annual
+forward-planning (`--plan-month` / `--plan-year`), a never-guess
+guardrail on every chemical recommendation (ADR 0003), a self-extending
+RAG via an allowlisted research subagent (ADR 0005), and launchd-based
+scheduling on macOS. Phase 2 will add live oaks, palms, hydrangeas, and
+other shrubs.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    user(["User<br/>--ask / --scheduled / --plan-year"]) --> main
+    user(["User<br/>--ask / --scheduled / --plan-month / --plan-year"]) --> main
     main[main.py] --> orch[orchestrator.py]
 
-    orch -->|route intent<br/>Sonnet 4.6| router{Router}
+    orch -->|route intent<br/>router model| router{Router}
     router --> weather[agents/weather.py<br/>NWS api.weather.gov]
     router --> soil[agents/soiltemp.py<br/>USDA-NRCS AWDB / SCAN]
     router --> drought[agents/drought.py<br/>US Drought Monitor]
     router --> kn[agents/knowledge.py<br/>LanceDB + bge-small]
 
-    kn -.->|weak retrieval| research[agents/research.py<br/>web_search +<br/>allowlisted fetch]
+    kn -.->|weak retrieval| research[agents/research.py<br/>DuckDuckGo +<br/>allowlisted fetch]
     research -.->|new passages| kn
 
     weather --> synth
     soil --> synth
     drought --> synth
-    kn --> synth[Synthesizer<br/>Opus 4.7]
+    kn --> synth[Synthesizer<br/>Gemini 2.5 Pro<br/>or Claude Opus]
 
     synth --> validate[Pydantic guardrail:<br/>citations required on<br/>chemical recommendations]
     validate --> notify[notify.py<br/>console / email / SMS]
 ```
+
+Model provider is swappable behind a `ChatModel` Protocol (ADR 0006). Default
+is Gemini 2.5 Flash (router) + Gemini 2.5 Pro (synthesizer) for cost; switch
+to Claude Sonnet + Opus by editing one line in `config.yaml`.
 
 External I/O is isolated to the `agents/*.py` modules. Each fails closed to
 `None` so a flaky NWS endpoint can't kill the whole run — the synthesizer is
@@ -115,32 +124,80 @@ routing, notify sinks. Schema is defined in
 [`src/lawn_agents/config.py`](src/lawn_agents/config.py) and validated by
 Pydantic at startup.
 
-`.env` holds secrets only (currently just `ANTHROPIC_API_KEY`).
+`.env` holds secrets only — `GEMINI_API_KEY` by default, or
+`ANTHROPIC_API_KEY` if you flip `models.provider` to `anthropic` in
+`config.yaml`.
+
+## Scheduling via launchd
+
+The weekly check is meant to run unattended via macOS launchd. A
+template plist lives at
+[`scripts/launchd/com.mattlawck.lawnagents.plist`](scripts/launchd/com.mattlawck.lawnagents.plist).
+
+```bash
+# 1. Fill in your paths
+export REPO=$(pwd)
+mkdir -p ~/Library/Logs/lawn-agents
+sed -e "s|/Users/YOUR_USER/Applications/lawn-agents|$REPO|g" \
+    -e "s|/Users/YOUR_USER|$HOME|g" \
+    scripts/launchd/com.mattlawck.lawnagents.plist \
+  > ~/Library/LaunchAgents/com.mattlawck.lawnagents.plist
+
+# 2. Bootstrap into the user session
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mattlawck.lawnagents.plist
+launchctl enable   gui/$(id -u)/com.mattlawck.lawnagents.scheduled
+
+# 3. Optional — kick off a one-shot run right now
+launchctl kickstart -k gui/$(id -u)/com.mattlawck.lawnagents.scheduled
+```
+
+Logs land in `~/Library/Logs/lawn-agents/{stdout,stderr}.log`. The job
+retries on non-zero exit with a 10-minute throttle so a transient NWS
+hiccup doesn't spiral.
+
+Teardown when you're done:
+
+```bash
+launchctl bootout gui/$(id -u)/com.mattlawck.lawnagents.scheduled
+rm ~/Library/LaunchAgents/com.mattlawck.lawnagents.plist
+```
 
 ## Development
 
 ```bash
-# Install + activate
+make dev      # install deps + activate pre-commit hooks
+make check    # CI-parity verification: ruff + format + mypy --strict + pytest
+```
+
+`make check` is the canonical pre-push command — it mirrors what
+`.github/workflows/ci.yml` runs. Coverage floor is 60% and currently
+sits around 87%.
+
+Individual targets are also available:
+
+```bash
+make lint           # ruff
+make format         # auto-fix formatting
+make format-check   # CI format check
+make type           # mypy --strict
+make test           # pytest with coverage
+make help           # full target list
+```
+
+Or invoke tools directly via `uv` if you don't have `make`:
+
+```bash
 uv sync --all-extras --dev
-source .venv/bin/activate  # optional; or prefix commands with `uv run`
-
-# Install pre-commit hooks (runs ruff, mypy, basic checks on every commit)
 uv run pre-commit install
-
-# Lint + format
-uv run ruff check .
-uv run ruff format .
-
-# Type-check (strict)
+uv run ruff check . && uv run ruff format --check .
 uv run mypy
-
-# Tests (with coverage)
 uv run pytest
 ```
 
 CI runs the same checks on every push and PR — see
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml). Coverage floor is
-60% and ratchets up over time.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml). The repo also
+runs **CodeQL**, **SonarCloud**, and a vulnerable-dependency review on
+every PR.
 
 ### Decision records
 
@@ -150,9 +207,10 @@ live in [`docs/journal/`](docs/journal/).
 
 ## Roadmap
 
-- **Phase 1 (now)** — Zeon Zoysia: weather + soil temp + RAG, scheduled
-  weekly check, ad-hoc Q&A, monthly and annual planning with drought
-  awareness, launchd scheduling.
+- **Phase 1 (shipped)** — Zeon Zoysia: weather, soil temperature + moisture,
+  drought, RAG with self-extending research, ad-hoc Q&A, weekly scheduled
+  check, monthly and annual planning, never-guess guardrail, launchd
+  scheduling.
 - **Phase 2** — add subject modules for live oaks (young + mature), palms,
   hydrangeas, and other shrubs. Extend the router to pick the right
   subject from the question.

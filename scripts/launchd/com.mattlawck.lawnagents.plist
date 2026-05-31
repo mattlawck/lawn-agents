@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Template launchd job for the weekly scheduled check.
+
+  Before loading: replace the two paths below ($REPO and $USER) with
+  your actual values. Or use the envsubst snippet in README.md under
+  "Scheduling via launchd."
+
+  Bootstrap (load + enable):
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mattlawck.lawnagents.plist
+    launchctl enable gui/$(id -u)/com.mattlawck.lawnagents.scheduled
+
+  Run on demand (without waiting for the schedule):
+    launchctl kickstart -k gui/$(id -u)/com.mattlawck.lawnagents.scheduled
+
+  Tear down:
+    launchctl bootout gui/$(id -u)/com.mattlawck.lawnagents.scheduled
+
+  Logs land in ~/Library/Logs/lawn-agents/.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mattlawck.lawnagents.scheduled</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- TODO: replace with the absolute path to your repo's venv. -->
+        <string>/Users/YOUR_USER/Applications/lawn-agents/.venv/bin/lawn-agents</string>
+        <string>--scheduled</string>
+    </array>
+
+    <!-- Mondays at 7:00 local. Weekday: 1 = Monday (per Apple's docs). -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>1</integer>
+        <key>Hour</key>
+        <integer>7</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- TODO: replace with the absolute path to your repo root. -->
+    <key>WorkingDirectory</key>
+    <string>/Users/YOUR_USER/Applications/lawn-agents</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USER/Library/Logs/lawn-agents/stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USER/Library/Logs/lawn-agents/stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>LANG</key>
+        <string>en_US.UTF-8</string>
+    </dict>
+
+    <!-- Don't run on launchd bootstrap; only on schedule. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Retry on non-zero exit (a transient NWS / AWDB hiccup will be
+         common). ThrottleInterval keeps us from spiraling — there's a
+         minimum 10-minute gap between retries. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>600</integer>
+
+    <key>ExitTimeOut</key>
+    <integer>120</integer>
+</dict>
+</plist>
