@@ -72,13 +72,21 @@ class GeminiChat:
         """See `ChatModel.complete_structured`."""
         from google.genai import types
 
+        # Gemini's response_schema rejects Pydantic v2's `additionalProperties`
+        # and `$ref`s. Embed the schema in the prompt and validate with
+        # Pydantic; the orchestrator handles parse errors via re-prompt-then-refuse.
+        schema_hint = json.dumps(response_model.model_json_schema(), indent=2)
+        system_with_schema = (
+            f"{system}\n\n"
+            "Reply with ONLY a JSON object matching this schema "
+            f"(no prose, no code fences):\n{schema_hint}"
+        )
         response = self._client.models.generate_content(
             model=self._model,
             contents=user,
             config=types.GenerateContentConfig(
-                system_instruction=system,
+                system_instruction=system_with_schema,
                 response_mime_type="application/json",
-                response_schema=response_model,
             ),
         )
         text = response.text or ""
