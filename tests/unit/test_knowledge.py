@@ -195,6 +195,17 @@ class TestLanceDBStore:
         assert results[0].source_title == c.source_title
         assert results[0].fetched_at == c.fetched_at
 
+    def test_reopen_existing_index_does_not_raise(self, tmp_path: Path) -> None:
+        index_dir = tmp_path / "idx"
+        first = LanceDBStore(index_dir=index_dir, vector_dim=4)
+        first.add([_hgic_chunk(0)], [[1.0, 0.0, 0.0, 0.0]])
+        assert first.count() == 1
+
+        second = LanceDBStore(index_dir=index_dir, vector_dim=4)
+        assert second.count() == 1
+        results = second.search([1.0, 0.0, 0.0, 0.0], k=1)
+        assert results[0].source_id == "hgic-1207"
+
 
 class TestRetrieveEndToEnd:
     """`retrieve()` glues embedder + store. Tests inject fakes."""
