@@ -180,9 +180,10 @@ class LanceDBStore:
             auto_ingested: bool = False
             requires_review: bool = False
 
-        if TABLE_NAME in list(db.list_tables()):
+        # Open-first; `list_tables()` was unreliable across LanceDB versions.
+        try:
             self._table = db.open_table(TABLE_NAME)
-        else:
+        except (FileNotFoundError, ValueError):
             self._table = db.create_table(TABLE_NAME, schema=ChunkRow)
         return self._table
 
