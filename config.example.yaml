@@ -119,7 +119,7 @@ seed_urls:
   # --- NCSU Extension (cross-state warm-season depth) ---
   - https://content.ces.ncsu.edu/zoysiagrass-lawn-maintenance-calendar
   - https://content.ces.ncsu.edu/large-patch-in-turf
-  - https://content.ces.ncsu.edu/diseases-of-warm-season-grasses
+  - https://content.ces.ncsu.edu/disease-management-in-landscape-turf
   - https://content.ces.ncsu.edu/controlling-sedges-in-landscape-plantings
 
 models:
