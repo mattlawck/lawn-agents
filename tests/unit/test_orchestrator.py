@@ -21,6 +21,8 @@ from lawn_agents.models import (
     Recommendation,
     SoilSnapshot,
     WeatherSnapshot,
+    WeedAlias,
+    WeedCategory,
 )
 
 # --- fakes ----------------------------------------------------------------
@@ -497,3 +499,101 @@ class TestResearchInvocation:
         # Research failure doesn't abort synthesis — we just keep the
         # weak passages and let the model decide.
         assert result.refused is False
+
+
+class TestRetrieveWithWeedAliases:
+    """Multi-query Reciprocal Rank Fusion retrieval for weed aliases (ADR 0008).
+
+    When the question mentions a known weed, retrieval runs the
+    question AND each weed's alias-group separately. Results are
+    merged by RRF so rank-based importance survives the BGE score
+    scale differences between queries.
+    """
+
+    @pytest.fixture
+    def app(self, settings: Settings) -> Any:
+        return settings.app
+
+    def test_no_weeds_matched_returns_single_query_results(self, app: Any) -> None:
+        from lawn_agents.orchestrator import _retrieve_with_weed_aliases
+
+        canned = [_passage(content="generic")]
+
+        def retrieve(q: str, _c: Any) -> list[Passage]:
+            assert q == "what fertilizer should I use?"
+            return canned
+
+        out = _retrieve_with_weed_aliases("what fertilizer should I use?", {}, app, retrieve)
+        assert out == canned
+
+    def test_rrf_promotes_chunk_appearing_in_multiple_queries(self, app: Any) -> None:
+        from lawn_agents.orchestrator import _retrieve_with_weed_aliases
+
+        # The "label" chunk ranks #2 on both queries; the "fertilizer"
+        # chunk only appears once. RRF should rank the label chunk
+        # higher because it appears in two queries.
+        fert = Passage(
+            content="fertilizer chunk",
+            score=0.85,
+            source_id="eguide",
+            source_title="E-Guide",
+        )
+        label_high = Passage(
+            content="label chunk",
+            score=0.55,
+            source_id="bayer",
+            source_title="Bayer label",
+        )
+        label_low = Passage(
+            content="label chunk",
+            score=0.60,
+            source_id="bayer",
+            source_title="Bayer label",
+        )
+        other = Passage(
+            content="other chunk",
+            score=0.70,
+            source_id="other",
+            source_title="Other",
+        )
+
+        def retrieve(q: str, _c: Any) -> list[Passage]:
+            if "Japanese clover" in q:
+                # Question-side: fert ranks #1, label #2.
+                return [fert, label_high, other]
+            # Alias-side: label #1, other #2.
+            return [label_low, other]
+
+        weeds = {
+            "Japanese clover": WeedAlias(
+                aliases=["Annual lespedeza", "Lespedeza striata"],
+                category=WeedCategory.BROADLEAF,
+            )
+        }
+        out = _retrieve_with_weed_aliases("I have Japanese clover", weeds, app, retrieve)
+        # RRF scores (k=60):
+        #   fert:  1/(60+1) = 0.0164
+        #   label: 1/(60+2) + 1/(60+1) = 0.0161 + 0.0164 = 0.0325
+        #   other: 1/(60+3) + 1/(60+2) = 0.0159 + 0.0161 = 0.0320
+        # Expected order: label, other, fert.
+        assert [p.source_id for p in out[:3]] == ["bayer", "other", "eguide"]
+
+    def test_top_k_cap_respected(self, app: Any) -> None:
+        from lawn_agents.orchestrator import _retrieve_with_weed_aliases
+
+        many = [
+            Passage(
+                content=f"chunk-{i}",
+                score=0.6,
+                source_id=f"src-{i}",
+                source_title=f"Src {i}",
+            )
+            for i in range(20)
+        ]
+        weeds = {
+            "Japanese clover": WeedAlias(
+                aliases=["Annual lespedeza"], category=WeedCategory.BROADLEAF
+            )
+        }
+        out = _retrieve_with_weed_aliases("Japanese clover", weeds, app, lambda _q, _c: many)
+        assert len(out) == app.knowledge.retrieval.rerank_top_k

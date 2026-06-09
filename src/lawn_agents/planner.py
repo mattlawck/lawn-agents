@@ -36,6 +36,7 @@ from lawn_agents.orchestrator import (
     _weed_bridge_text,
     detect_brands_in_question,
     detect_weeds_in_question,
+    expand_query_with_weed_aliases,
 )
 
 if TYPE_CHECKING:
@@ -50,6 +51,7 @@ if TYPE_CHECKING:
         Passage,
         SoilSnapshot,
         WeatherSnapshot,
+        WeedAlias,
         WeedsConfig,
     )
 
@@ -160,7 +162,9 @@ def _plan(
     log.info("planner.start", scope=scope, target=target, query=retrieval_query)
 
     conditions = _fetch_conditions(settings.app, wfn, sfn, dfn)
-    passages = _safe_retrieve(retrieval_query, settings.app, rfn)
+    weed_matches = detect_weeds_in_question(target, settings.weeds)
+    expanded_query = expand_query_with_weed_aliases(retrieval_query, weed_matches)
+    passages = _safe_retrieve(expanded_query, settings.app, rfn)
 
     return _synthesize_plan_with_guardrail(
         scope=scope,
@@ -169,6 +173,7 @@ def _plan(
         passages=passages,
         chemicals=settings.chemicals,
         weeds=settings.weeds,
+        weed_matches=weed_matches,
         synthesizer=synth_chat,
     )
 
@@ -194,11 +199,15 @@ def _synthesize_plan_with_guardrail(
     passages: list[Passage],
     chemicals: ChemicalsConfig,
     weeds: WeedsConfig,
+    weed_matches: dict[str, WeedAlias] | None = None,
     synthesizer: ChatModel,
 ) -> Recommendation:
     system = _load_prompt("planner.md")
     brand_bridge = _brand_bridge_text(detect_brands_in_question(target, chemicals))
-    weed_bridge = _weed_bridge_text(detect_weeds_in_question(target, weeds))
+    weed_matches = (
+        weed_matches if weed_matches is not None else detect_weeds_in_question(target, weeds)
+    )
+    weed_bridge = _weed_bridge_text(weed_matches)
     user_prompt = _planner_user_prompt(
         scope, target, conditions, passages, brand_bridge, weed_bridge
     )
