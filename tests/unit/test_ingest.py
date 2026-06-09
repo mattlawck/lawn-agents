@@ -15,6 +15,7 @@ from lawn_agents.ingest import (
     chunk_text,
     discover_pdfs,
     fetch_pdf_pages,
+    fetch_pdf_url_pages,
     fetch_url_text,
     ingest,
     make_url_sources,
@@ -109,6 +110,35 @@ class TestMakeUrlSources:
         assert sources[2].source_title == "example.com/"
         assert all(s.source_id.startswith("url:") for s in sources)
 
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://www.trianglecc.com/wp-content/uploads/2022/08/Bayer-Celcius-WG-Label.pdf",
+            "https://example.com/Foo.PDF",  # uppercase extension
+            "https://example.com/path/to/file.pdf?download=1&v=2",  # query string
+            "https://example.com/file.pdf#page=3",  # fragment
+            "https://bynder.envu.com/m/26dea06330c25990/original/Celsius-WG_NA_US_EN.pdf",
+        ],
+    )
+    def test_pdf_urls_tagged_pdf_url_kind(self, url: str) -> None:
+        sources = make_url_sources([url])
+        assert sources[0].kind == "pdf_url"
+        assert sources[0].location == url
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://hgic.clemson.edu/factsheet/zoysiagrass/",
+            "https://example.com/page.html",
+            "https://example.com",
+            "https://example.com/article",
+            "https://example.com/path.pdfish",  # similar but not actually .pdf
+        ],
+    )
+    def test_non_pdf_urls_stay_url_kind(self, url: str) -> None:
+        sources = make_url_sources([url])
+        assert sources[0].kind == "url"
+
 
 # --- chunking --------------------------------------------------------------
 
@@ -199,6 +229,50 @@ class TestFetchPdfPages:
         assert "page two" in pages[1][1].lower()
 
 
+class TestFetchPdfUrlPages:
+    """Regression: `.pdf` URLs in seed_urls must reach pypdf, not trafilatura."""
+
+    def test_round_trip_via_httpx(self, fixture_pdf: Path) -> None:
+        pdf_bytes = fixture_pdf.read_bytes()
+        url = "https://example.com/zoysia-guide.pdf"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert str(request.url) == url
+            return httpx.Response(
+                200, content=pdf_bytes, headers={"content-type": "application/pdf"}
+            )
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        source = IngestSource(
+            kind="pdf_url",
+            location=url,
+            source_id=f"url:{url}",
+            source_title="example.com/zoysia-guide.pdf",
+        )
+        pages = fetch_pdf_url_pages(source, client)
+        assert len(pages) == 2
+        assert pages[0][0] == 1
+        assert "zoysia" in pages[0][1].lower()
+        assert pages[1][0] == 2
+        assert "page two" in pages[1][1].lower()
+
+    def test_http_error_raises(self) -> None:
+        url = "https://example.com/missing.pdf"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(404, text="not found")
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        source = IngestSource(
+            kind="pdf_url",
+            location=url,
+            source_id=f"url:{url}",
+            source_title="example.com/missing.pdf",
+        )
+        with pytest.raises(httpx.HTTPStatusError):
+            fetch_pdf_url_pages(source, client)
+
+
 class TestFetchUrlText:
     def test_extracts_main_content(self) -> None:
         html = """
@@ -262,6 +336,22 @@ class TestIngest:
 
         return httpx.Client(transport=httpx.MockTransport(handler))
 
+    @staticmethod
+    def _mock_client_mixed(payloads: dict[str, str | bytes]) -> httpx.Client:
+        """HTML for `str` payloads, PDF bytes for `bytes` payloads."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            payload = payloads.get(str(request.url))
+            if payload is None:
+                return httpx.Response(404, text="not in fixture")
+            if isinstance(payload, bytes):
+                return httpx.Response(
+                    200, content=payload, headers={"content-type": "application/pdf"}
+                )
+            return httpx.Response(200, text=payload, headers={"content-type": "text/html"})
+
+        return httpx.Client(transport=httpx.MockTransport(handler))
+
     def test_ingest_pdf_and_url_into_store(
         self,
         settings: Settings,
@@ -292,6 +382,43 @@ class TestIngest:
         assert report.chunks_added > 0
         assert report.chunks_total_after == report.chunks_added
         assert store.count() == report.chunks_added
+
+    def test_ingest_pdf_url_into_store(
+        self,
+        settings: Settings,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        fixture_pdf: Path,
+    ) -> None:
+        """Regression: a `.pdf` URL must be parsed via pypdf, not trafilatura.
+
+        Before the fix, `make_url_sources` tagged every URL `kind="url"`,
+        and `.pdf` URLs went through `fetch_url_text` → trafilatura,
+        which returned empty on PDF bytes and silently dropped the
+        source as `ingest.source_empty`. This test fixes that regression.
+        """
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+
+        pdf_url = "https://example.com/zoysia-guide.pdf"
+        self._override_corpus_and_seed(monkeypatch, settings, corpus, [pdf_url])
+
+        store = LanceDBStore(index_dir=tmp_path / "idx", vector_dim=4)
+        embeddings = FakeEmbeddings(dim=4)
+        client = self._mock_client_mixed({pdf_url: fixture_pdf.read_bytes()})
+
+        report = ingest(settings.app, embeddings=embeddings, store=store, http_client=client)
+
+        assert report.sources_seen == 1
+        assert report.sources_ok == 1
+        assert report.sources_failed == []
+        assert report.chunks_added >= 2  # one chunk per fixture page
+        assert store.count() >= 2
+        # Citation provenance: at least one stored chunk must carry the
+        # PDF URL + page number so the synthesizer can cite both.
+        passages = store.search(embeddings.embed_query("zoysia"), k=10)
+        assert any(p.url == pdf_url and p.page == 1 for p in passages)
+        assert any(p.page == 2 for p in passages)
 
     def test_ingest_is_idempotent(
         self,

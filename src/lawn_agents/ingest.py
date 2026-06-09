@@ -40,10 +40,10 @@ CHARS_PER_TOKEN = 4
 
 @dataclass(slots=True, frozen=True)
 class IngestSource:
-    """A single input to the ingester — either a PDF on disk or a URL."""
+    """A single input to the ingester: a PDF on disk, an HTML URL, or a PDF URL."""
 
-    kind: Literal["pdf", "url"]
-    location: str  # absolute path for pdf, full URL for url
+    kind: Literal["pdf", "url", "pdf_url"]
+    location: str  # absolute path for pdf; full URL for url and pdf_url
     source_id: str
     source_title: str
 
@@ -81,16 +81,26 @@ def discover_pdfs(corpus_dir: Path) -> list[IngestSource]:
 
 
 def make_url_sources(seed_urls: Iterable[str]) -> list[IngestSource]:
-    """Wrap each URL in an `IngestSource` with a readable title."""
+    """Wrap each URL in an `IngestSource` with a readable title.
+
+    URLs whose path ends in `.pdf` (case-insensitive, query/fragment
+    ignored) are tagged `kind="pdf_url"` so the dispatcher routes them
+    through pypdf rather than the HTML extractor. Trafilatura on a PDF
+    byte stream returns empty and the source gets silently dropped —
+    the bug fix here.
+    """
     sources: list[IngestSource] = []
     for url in seed_urls:
         parsed = urlparse(url)
         domain = parsed.netloc
         path = parsed.path.rstrip("/") or "/"
         title = f"{domain}{path}"
+        kind: Literal["url", "pdf_url"] = (
+            "pdf_url" if parsed.path.lower().endswith(".pdf") else "url"
+        )
         sources.append(
             IngestSource(
-                kind="url",
+                kind=kind,
                 location=url,
                 source_id=f"url:{url}",
                 source_title=title,
@@ -116,6 +126,39 @@ def fetch_pdf_pages(source: IngestSource) -> list[tuple[int, str]]:
             # pages; we never want one bad page to abort the whole PDF.
             log.warning(
                 "ingest.pdf_page_extract_failed",
+                source=source.source_id,
+                page=idx,
+                error=str(exc),
+            )
+            continue
+        text = text.strip()
+        if text:
+            pages.append((idx, text))
+    return pages
+
+
+def fetch_pdf_url_pages(source: IngestSource, client: httpx.Client) -> list[tuple[int, str]]:
+    """Download a PDF over HTTP and extract pages via pypdf.
+
+    Mirrors `fetch_pdf_pages` but reads from an `httpx`-fetched byte
+    stream wrapped in `io.BytesIO`, so no temp file is needed. PdfReader
+    accepts any binary file-like; the BytesIO is closed implicitly when
+    it goes out of scope.
+    """
+    from io import BytesIO
+
+    from pypdf import PdfReader
+
+    response = client.get(source.location, follow_redirects=True)
+    response.raise_for_status()
+    reader = PdfReader(BytesIO(response.content))
+    pages: list[tuple[int, str]] = []
+    for idx, page in enumerate(reader.pages, start=1):
+        try:
+            text = page.extract_text() or ""
+        except Exception as exc:
+            log.warning(
+                "ingest.pdf_url_page_extract_failed",
                 source=source.source_id,
                 page=idx,
                 error=str(exc),
@@ -335,9 +378,13 @@ def _source_to_chunks(
     chunk_overlap_chars: int,
     fetched_at: datetime,
 ) -> list[Chunk]:
-    if source.kind == "pdf":
+    if source.kind in ("pdf", "pdf_url"):
+        pages = (
+            fetch_pdf_pages(source) if source.kind == "pdf" else fetch_pdf_url_pages(source, client)
+        )
         chunks: list[Chunk] = []
-        for page_num, page_text in fetch_pdf_pages(source):
+        url = source.location if source.kind == "pdf_url" else None
+        for page_num, page_text in pages:
             chunks.extend(
                 chunk_text(
                     page_text,
@@ -345,6 +392,7 @@ def _source_to_chunks(
                     source_title=source.source_title,
                     chunk_size_chars=chunk_size_chars,
                     chunk_overlap_chars=chunk_overlap_chars,
+                    url=url,
                     page=page_num,
                     fetched_at=fetched_at,
                 )
@@ -361,8 +409,9 @@ def _source_to_chunks(
             url=source.location,
             fetched_at=fetched_at,
         )
-    # Unreachable — `IngestSource.kind` is a Literal.
-    msg = f"unknown source kind: {source.kind!r}"  # type: ignore[unreachable]
+    # Defensive — `IngestSource.kind` is a Literal so all cases above
+    # are covered; this guards against future additions to the Literal.
+    msg = f"unknown source kind: {source.kind!r}"
     raise ValueError(msg)
 
 
