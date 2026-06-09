@@ -1,0 +1,170 @@
+# Weed common-name → alias bridge.
+#
+# Extension publications (Clemson HGIC, NCSU TurfFiles, UGA Extension,
+# UF IFAS) and manufacturer labels (Bayer/Envu Celsius WG, etc.) describe
+# turf weeds by scientific name or an older common-name form (e.g.,
+# "annual lespedeza" for what most homeowners call "Japanese clover").
+# Users ask questions in everyday English.
+#
+# This file is the bridge. When a common name here appears in a user's
+# question, the orchestrator injects the corresponding aliases into the
+# synthesizer prompt so passages discussing the weed under its
+# scientific or label-internal terminology are treated as supporting
+# evidence for the homeowner's question.
+#
+# Schema:
+#   weeds:
+#     "<Common Name>":
+#       aliases: ["<scientific name>", "<other common form>", ...]
+#       category: <broadleaf|grassy|sedge>
+#       notes: "<optional short note>"
+#
+# Scope: warm-season Southeast US turf, focused on what the brand-bridge
+# products (Celsius WG, Sedgehammer, Acelepryn, etc.) actually control,
+# plus the weeds a Mt Pleasant SC homeowner on Zeon Zoysia is plausibly
+# going to ask about. See ADR 0008.
+
+weeds:
+  # --- Broadleaf ---
+  "Japanese clover":
+    aliases:
+      - "Annual lespedeza"
+      - "Lespedeza striata"
+      - "Kummerowia striata"
+    category: broadleaf
+    notes: "Older taxonomy is Lespedeza striata; modern is Kummerowia striata. The Bayer Celsius WG label uses 'Annual lespedeza' with the older binomial. Controlled at the HIGH rate per label."
+
+  "Dollarweed":
+    aliases:
+      - "Pennywort"
+      - "Hydrocotyle"
+      - "Hydrocotyle umbellata"
+      - "Hydrocotyle bonariensis"
+    category: broadleaf
+    notes: "Often confused with dichondra; dollarweed has rounded leaves with a center-attached stem (peltate). Indicates over-watering."
+
+  "Doveweed":
+    aliases:
+      - "Murdannia nudiflora"
+    category: broadleaf
+    notes: "Late-emerging summer annual; mimics grass but has fleshy stems. One of the harder-to-control summer broadleafs."
+
+  "Virginia buttonweed":
+    aliases:
+      - "Diodia virginiana"
+    category: broadleaf
+    notes: "Difficult perennial; repeat applications usually required."
+
+  "Florida betony":
+    aliases:
+      - "Stachys floridana"
+      - "Rattlesnake weed"
+    category: broadleaf
+
+  "Florida pusley":
+    aliases:
+      - "Richardia scabra"
+      - "Mexican clover"
+    category: broadleaf
+
+  "Spotted spurge":
+    aliases:
+      - "Chamaesyce maculata"
+      - "Euphorbia maculata"
+      - "Prostrate spurge"
+      - "Chamaesyce humistrata"
+    category: broadleaf
+    notes: "Spotted and prostrate spurge are often lumped in label tables; both controlled by similar chemistries."
+
+  "Lawn burweed":
+    aliases:
+      - "Soliva sessilis"
+      - "Spurweed"
+      - "Sticker weed"
+    category: broadleaf
+    notes: "Winter annual; spiny seeds. Best controlled in late fall / early winter with a post-emergent before seed-set."
+
+  "Common chickweed":
+    aliases:
+      - "Stellaria media"
+    category: broadleaf
+    notes: "Winter annual; common cool-season weed in southern warm-season lawns during dormancy."
+
+  "Mouse-ear chickweed":
+    aliases:
+      - "Cerastium glomeratum"
+      - "Cerastium fontanum"
+    category: broadleaf
+
+  "Henbit":
+    aliases:
+      - "Lamium amplexicaule"
+    category: broadleaf
+    notes: "Winter annual; distinctive purple flowers. Mint family — square stem."
+
+  "White clover":
+    aliases:
+      - "Trifolium repens"
+    category: broadleaf
+    notes: "Often desired in pastures; treated as a weed in formal lawns."
+
+  "Hop clover":
+    aliases:
+      - "Trifolium campestre"
+      - "Trifolium dubium"
+      - "Hop clovers"
+    category: broadleaf
+
+  # --- Grassy ---
+  "Large crabgrass":
+    aliases:
+      - "Digitaria sanguinalis"
+    category: grassy
+    notes: "Summer annual; the canonical pre-emergent target. Prodiamine / dithiopyr / oxadiazon timing keyed to soil temp ~55F."
+
+  "Smooth crabgrass":
+    aliases:
+      - "Digitaria ischaemum"
+    category: grassy
+
+  "Dallisgrass":
+    aliases:
+      - "Paspalum dilatatum"
+    category: grassy
+    notes: "Perennial; suppression-only on most warm-season turf labels. The Bayer Celsius WG label lists it at the high rate as suppression."
+
+  "Goosegrass":
+    aliases:
+      - "Eleusine indica"
+      - "Silver crabgrass"
+    category: grassy
+    notes: "Summer annual; often resists crabgrass-only pre-emergents. Distinct flat white-centered rosette."
+
+  "Sandbur":
+    aliases:
+      - "Cenchrus incertus"
+      - "Cenchrus echinatus"
+      - "Field sandbur"
+    category: grassy
+    notes: "Coastal SC has the right sandy soil for sandbur infestations. Painful bur-encased seeds."
+
+  # --- Sedges ---
+  "Yellow nutsedge":
+    aliases:
+      - "Cyperus esculentus"
+      - "Nutgrass"
+    category: sedge
+    notes: "Summer perennial; triangular stem (sedges have edges). Halosulfuron (Sedgehammer) is the standard control."
+
+  "Purple nutsedge":
+    aliases:
+      - "Cyperus rotundus"
+      - "Nutgrass"
+    category: sedge
+    notes: "Tropical sedge; less common in coastal SC than yellow nutsedge."
+
+  "Green kyllinga":
+    aliases:
+      - "Kyllinga brevifolia"
+    category: sedge
+    notes: "Often misidentified as a fine grass; lower-growing than nutsedge. Same control chemistries as nutsedges."

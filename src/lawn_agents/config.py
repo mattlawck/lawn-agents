@@ -16,10 +16,11 @@ import yaml
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from lawn_agents.models import ChemicalsConfig
+from lawn_agents.models import ChemicalsConfig, WeedsConfig
 
 DEFAULT_CONFIG_PATH = Path("config.yaml")
 DEFAULT_CHEMICALS_PATH = Path("data/chemicals.yaml")
+DEFAULT_WEEDS_PATH = Path("data/weeds.yaml")
 
 Provider = Literal["gemini", "anthropic"]
 
@@ -147,6 +148,7 @@ class AppConfig(BaseModel):
     research: ResearchConfig
     seed_urls: list[str] = Field(default_factory=list)
     chemicals_file: Path = Field(default=DEFAULT_CHEMICALS_PATH)
+    weeds_file: Path = Field(default=DEFAULT_WEEDS_PATH)
     models: ModelsConfig
     http: HttpConfig
     notify: NotifyConfig
@@ -174,6 +176,7 @@ class Settings(BaseSettings):
 
     app: AppConfig
     chemicals: ChemicalsConfig = Field(default_factory=ChemicalsConfig)
+    weeds: WeedsConfig = Field(default_factory=WeedsConfig)
 
     @model_validator(mode="after")
     def _require_key_for_provider(self) -> Self:
@@ -211,4 +214,8 @@ class Settings(BaseSettings):
         if app.chemicals_file.exists():
             chemicals_raw = yaml.safe_load(app.chemicals_file.read_text(encoding="utf-8")) or {}
             chemicals = ChemicalsConfig.model_validate(chemicals_raw)
-        return cls(app=app, chemicals=chemicals)
+        weeds = WeedsConfig()
+        if app.weeds_file.exists():
+            weeds_raw = yaml.safe_load(app.weeds_file.read_text(encoding="utf-8")) or {}
+            weeds = WeedsConfig.model_validate(weeds_raw)
+        return cls(app=app, chemicals=chemicals, weeds=weeds)
