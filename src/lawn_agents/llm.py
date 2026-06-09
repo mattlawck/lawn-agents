@@ -12,10 +12,14 @@ from typing import TYPE_CHECKING, Literal, Protocol
 
 from pydantic import BaseModel
 
+from lawn_agents.logging import get_logger
+
 if TYPE_CHECKING:
     from lawn_agents.config import Settings
 
 ChatRole = Literal["router", "synthesizer"]
+
+log = get_logger(__name__)
 
 
 class ChatModel(Protocol):
@@ -51,8 +55,17 @@ class GeminiChat:
             model: Model ID, e.g. `gemini-2.5-flash` or `gemini-2.5-pro`.
         """
         from google import genai
+        from google.genai import types
 
-        self._client = genai.Client(api_key=api_key)
+        # Enable the SDK's built-in retry on 408/429/5xx with exponential
+        # backoff and jitter. Defaults: 5 attempts, 1.0s initial delay,
+        # 60.0s max delay, exp_base=2.0, jitter=1.0. We were silently
+        # failing on transient 503s before this because retry_options was
+        # unset; see fix/synth-retry-on-5xx.
+        self._client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(retry_options=types.HttpRetryOptions()),
+        )
         self._model = model
 
     def complete_text(self, *, system: str, user: str) -> str:
@@ -64,6 +77,7 @@ class GeminiChat:
             contents=user,
             config=types.GenerateContentConfig(system_instruction=system),
         )
+        _log_gemini_usage(self._model, "complete_text", response)
         return (response.text or "").strip()
 
     def complete_structured[T: BaseModel](
@@ -89,6 +103,7 @@ class GeminiChat:
                 response_mime_type="application/json",
             ),
         )
+        _log_gemini_usage(self._model, "complete_structured", response)
         text = response.text or ""
         if not text:
             msg = "Gemini returned an empty structured response."
@@ -112,7 +127,13 @@ class AnthropicChat:
         """
         from anthropic import Anthropic
 
-        self._client = Anthropic(api_key=api_key)
+        # The SDK default timeout is 10 minutes (intended for very long
+        # streaming requests). For our interactive CLI use case 60s is a
+        # better ceiling — user has lost interest long before then. The
+        # SDK still applies its default `max_retries=2` to transient
+        # 408/409/429/5xx + connection errors with exponential backoff,
+        # so 60s x ~3 attempts is the worst-case wall clock.
+        self._client = Anthropic(api_key=api_key, timeout=60.0)
         self._model = model
 
     def complete_text(self, *, system: str, user: str) -> str:
@@ -123,6 +144,7 @@ class AnthropicChat:
             system=system,
             messages=[{"role": "user", "content": user}],
         )
+        _log_anthropic_usage(self._model, "complete_text", response)
         for block in response.content:
             if getattr(block, "type", None) == "text":
                 return str(getattr(block, "text", "")).strip()
@@ -148,6 +170,7 @@ class AnthropicChat:
             ],
             tool_choice={"type": "tool", "name": tool_name},
         )
+        _log_anthropic_usage(self._model, "complete_structured", response)
         for block in response.content:
             if getattr(block, "type", None) == "tool_use":
                 payload = getattr(block, "input", None)
@@ -203,6 +226,39 @@ def build_chat_model(role: ChatRole, settings: Settings) -> ChatModel:
     # defensive guard.
     msg = f"unsupported provider: {provider!r}"  # type: ignore[unreachable]
     raise ValueError(msg)
+
+
+def _log_gemini_usage(model: str, op: str, response: object) -> None:
+    """Emit a structlog event with Gemini token usage if available."""
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None:
+        return
+    log.info(
+        "llm.gemini_usage",
+        model=model,
+        op=op,
+        input_tokens=getattr(usage, "prompt_token_count", None),
+        output_tokens=getattr(usage, "candidates_token_count", None),
+        cached_tokens=getattr(usage, "cached_content_token_count", None),
+        total_tokens=getattr(usage, "total_token_count", None),
+    )
+
+
+def _log_anthropic_usage(model: str, op: str, response: object) -> None:
+    """Emit a structlog event with Anthropic token usage + request_id."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return
+    log.info(
+        "llm.anthropic_usage",
+        model=model,
+        op=op,
+        request_id=getattr(response, "_request_id", None),
+        input_tokens=getattr(usage, "input_tokens", None),
+        output_tokens=getattr(usage, "output_tokens", None),
+        cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", None),
+        cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", None),
+    )
 
 
 def parse_router_intent(raw: str) -> str:

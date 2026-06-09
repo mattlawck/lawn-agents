@@ -159,3 +159,140 @@ class TestGeminiCompleteStructured:
         adapter, _ = self._build_adapter(response_text="")
         with pytest.raises(RuntimeError, match="empty structured response"):
             adapter.complete_structured(system="sys", user="usr", response_model=_ToyResponse)
+
+
+class TestGeminiClientRetryConfig:
+    """Regression: the Gemini client must be constructed with retry enabled.
+
+    The SDK's `HttpOptions(retry_options=HttpRetryOptions())` flips on the
+    default retry behavior (5 attempts, 408/429/5xx, exp backoff with
+    jitter, 1-60s). Without it the SDK does NOT retry transient errors
+    and we surface 503s to the user as hard refusals.
+    """
+
+    def test_client_constructed_with_retry_options(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from google import genai
+        from google.genai import types
+
+        captured: dict[str, Any] = {}
+
+        original_init = genai.Client.__init__
+
+        def spy_init(self: Any, **kwargs: Any) -> None:
+            # Don't call the real init — it tries to validate the API key.
+            captured.update(kwargs)
+
+        monkeypatch.setattr(genai.Client, "__init__", spy_init)
+        try:
+            GeminiChat(api_key="test-dummy", model="gemini-2.5-flash")
+        finally:
+            monkeypatch.setattr(genai.Client, "__init__", original_init)
+
+        http_options = captured.get("http_options")
+        assert http_options is not None
+        assert isinstance(http_options, types.HttpOptions)
+        assert http_options.retry_options is not None
+        assert isinstance(http_options.retry_options, types.HttpRetryOptions)
+
+
+class TestAnthropicClientConfig:
+    """Anthropic client should use a 60s timeout, not the 10-min SDK default."""
+
+    def test_client_constructed_with_60s_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import anthropic
+
+        captured: dict[str, Any] = {}
+
+        original_init = anthropic.Anthropic.__init__
+
+        def spy_init(self: Any, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        monkeypatch.setattr(anthropic.Anthropic, "__init__", spy_init)
+        try:
+            AnthropicChat(api_key="sk-ant-test-dummy", model="claude-sonnet-4-6")
+        finally:
+            monkeypatch.setattr(anthropic.Anthropic, "__init__", original_init)
+
+        assert captured.get("timeout") == 60.0
+
+
+class _FakeGeminiUsageMetadata:
+    def __init__(self) -> None:
+        self.prompt_token_count = 100
+        self.candidates_token_count = 200
+        self.cached_content_token_count = 0
+        self.total_token_count = 300
+
+
+class _FakeGeminiResponseWithUsage:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.usage_metadata = _FakeGeminiUsageMetadata()
+
+
+class _FakeAnthropicUsage:
+    def __init__(self) -> None:
+        self.input_tokens = 100
+        self.output_tokens = 200
+        self.cache_read_input_tokens = 0
+        self.cache_creation_input_tokens = 0
+
+
+class _FakeAnthropicResponse:
+    def __init__(self) -> None:
+        self.usage = _FakeAnthropicUsage()
+        self.content: list[Any] = []
+        self._request_id = "req_test_123"
+
+
+class TestUsageLogging:
+    """Each adapter logs token usage (and Anthropic request_id) per call."""
+
+    def test_gemini_logs_usage(self) -> None:
+        import structlog
+
+        from lawn_agents.llm import _log_gemini_usage
+
+        with structlog.testing.capture_logs() as captured:
+            _log_gemini_usage(
+                "gemini-2.5-flash", "complete_structured", _FakeGeminiResponseWithUsage("ok")
+            )
+        events = [e for e in captured if e.get("event") == "llm.gemini_usage"]
+        assert len(events) == 1
+        event = events[0]
+        assert event["input_tokens"] == 100
+        assert event["output_tokens"] == 200
+        assert event["total_tokens"] == 300
+        assert event["model"] == "gemini-2.5-flash"
+        assert event["op"] == "complete_structured"
+
+    def test_anthropic_logs_usage_and_request_id(self) -> None:
+        import structlog
+
+        from lawn_agents.llm import _log_anthropic_usage
+
+        with structlog.testing.capture_logs() as captured:
+            _log_anthropic_usage(
+                "claude-sonnet-4-6", "complete_structured", _FakeAnthropicResponse()
+            )
+        events = [e for e in captured if e.get("event") == "llm.anthropic_usage"]
+        assert len(events) == 1
+        event = events[0]
+        assert event["input_tokens"] == 100
+        assert event["output_tokens"] == 200
+        assert event["request_id"] == "req_test_123"
+        assert event["model"] == "claude-sonnet-4-6"
+
+    def test_no_usage_attribute_no_log(self) -> None:
+        import structlog
+
+        from lawn_agents.llm import _log_anthropic_usage, _log_gemini_usage
+
+        class _Bare:
+            pass
+
+        with structlog.testing.capture_logs() as captured:
+            _log_gemini_usage("m", "op", _Bare())
+            _log_anthropic_usage("m", "op", _Bare())
+        assert not [e for e in captured if "_usage" in e.get("event", "")]
