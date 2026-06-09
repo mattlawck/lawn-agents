@@ -16,7 +16,10 @@ import yaml
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from lawn_agents.models import ChemicalsConfig
+
 DEFAULT_CONFIG_PATH = Path("config.yaml")
+DEFAULT_CHEMICALS_PATH = Path("data/chemicals.yaml")
 
 Provider = Literal["gemini", "anthropic"]
 
@@ -143,6 +146,7 @@ class AppConfig(BaseModel):
     knowledge: KnowledgeConfig
     research: ResearchConfig
     seed_urls: list[str] = Field(default_factory=list)
+    chemicals_file: Path = Field(default=DEFAULT_CHEMICALS_PATH)
     models: ModelsConfig
     http: HttpConfig
     notify: NotifyConfig
@@ -169,6 +173,7 @@ class Settings(BaseSettings):
     lawn_agents_index_dir: Path | None = Field(default=None, alias="LAWN_AGENTS_INDEX_DIR")
 
     app: AppConfig
+    chemicals: ChemicalsConfig = Field(default_factory=ChemicalsConfig)
 
     @model_validator(mode="after")
     def _require_key_for_provider(self) -> Self:
@@ -201,4 +206,9 @@ class Settings(BaseSettings):
             msg = f"config file not found: {config_path}"
             raise FileNotFoundError(msg)
         raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        return cls(app=AppConfig.model_validate(raw))
+        app = AppConfig.model_validate(raw)
+        chemicals = ChemicalsConfig()
+        if app.chemicals_file.exists():
+            chemicals_raw = yaml.safe_load(app.chemicals_file.read_text(encoding="utf-8")) or {}
+            chemicals = ChemicalsConfig.model_validate(chemicals_raw)
+        return cls(app=app, chemicals=chemicals)

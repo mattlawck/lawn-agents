@@ -1,0 +1,81 @@
+# Brand → active-ingredient bridge.
+#
+# Extension publications (Clemson HGIC, NCSU TurfFiles, UGA Extension,
+# UF IFAS) discuss turf chemicals by active ingredient, not by retail
+# brand. The synthesizer reads passages from those sources; users ask
+# questions using brand names ("GrubX", "Celsius", "Sedgehammer"). Without
+# a bridge, the synthesizer refuses on the brand even when the corpus
+# fully covers the chemistry.
+#
+# This file is the bridge. When a brand here appears in a user's
+# question, the orchestrator injects the corresponding active
+# ingredient(s) into the synthesizer prompt so passages discussing that
+# chemistry are treated as supporting evidence for the brand.
+#
+# Schema:
+#   brands:
+#     "<Brand Name>":
+#       active_ingredients: ["<chemical>", ...]
+#       category: <fertilizer|micronutrient|herbicide|insecticide|fungicide>
+#       notes: "<optional short note>"
+#
+# Seed list is focused on warm-season Southeast US turf. Add as new
+# products enter your program.
+
+brands:
+  # --- Insecticides (white grubs + turf caterpillars) ---
+  "GrubX":
+    active_ingredients: ["chlorantraniliprole"]
+    category: insecticide
+    notes: "Scotts consumer brand; same chemistry as Acelepryn."
+
+  "Acelepryn":
+    active_ingredients: ["chlorantraniliprole"]
+    category: insecticide
+    notes: "Syngenta professional product; preventive white-grub and turf-caterpillar control."
+
+  "Merit":
+    active_ingredients: ["imidacloprid"]
+    category: insecticide
+    notes: "Bayer / Envu; preventive grub control; older neonicotinoid chemistry."
+
+  "Dylox":
+    active_ingredients: ["trichlorfon"]
+    category: insecticide
+    notes: "Bayer / Envu; curative grub control once damage is visible."
+
+  # --- Post-emergent herbicides ---
+  "Celsius":
+    active_ingredients:
+      - "thiencarbazone-methyl"
+      - "iodosulfuron-methyl-sodium"
+      - "dicamba"
+    category: herbicide
+    notes: "Bayer / Envu; selective broadleaf + grassy-weed control for warm-season turf; tolerates summer heat."
+
+  "Sedgehammer":
+    active_ingredients: ["halosulfuron-methyl"]
+    category: herbicide
+    notes: "Gowan; selective post-emergent for yellow + purple nutsedge and kyllinga."
+
+  # --- Pre-emergent herbicides ---
+  "Prodiamine":
+    active_ingredients: ["prodiamine"]
+    category: herbicide
+    notes: "Active-ingredient name; sold as Barricade. Long-residual spring/fall pre-emergent."
+
+  "Dithiopyr":
+    active_ingredients: ["dithiopyr"]
+    category: herbicide
+    notes: "Sold as Dimension. Provides crabgrass post-emergent control through tillering."
+
+  # --- Fungicides ---
+  "Heritage":
+    active_ingredients: ["azoxystrobin"]
+    category: fungicide
+    notes: "Syngenta; broad-spectrum strobilurin for large patch and other warm-season diseases."
+
+  "3336":
+    active_ingredients: ["thiophanate-methyl"]
+    category: fungicide
+    notes: "Cleary's 3336; systemic fungicide for brown / large patch."
