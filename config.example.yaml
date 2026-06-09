@@ -80,6 +80,13 @@ research:
     - turffiles.ncsu.edu
     - content.ces.ncsu.edu
     - edis.ifas.ufl.edu
+    # Chemical labels + manufacturer product guides. CDMS is the industry
+    # label database; envu.com (formerly Bayer turf) makes most of the
+    # warm-season SE turf chemistry in data/chemicals.yaml. Manual
+    # `seed_urls` entries bypass the allowlist; this controls only the
+    # research subagent's auto-fetches.
+    - cdms.net
+    - envu.com
     - weather.gov
     - drought.gov
     - nrcs.usda.gov
@@ -89,13 +96,31 @@ research:
 # fetch, chunk, and embed each. Add to taste; PDFs in data/corpus/ are
 # ingested automatically alongside.
 seed_urls:
+  # --- Cultivar-specific (Zeon Zoysia) ---
   - https://info.supersod.com/lawn-care/zeon-zoysia-lawn-maintenance
   - https://info.supersod.com/zeon-zoysia-specs
   - https://info.supersod.com/hubfs/Super-Sod%20Technical%20Sheets%20aka%20Slicks/zeon-zoysia.pdf
   - https://info.supersod.com/lawn-academy-maintenance-guides
   - https://info.supersod.com/lawn-care/tag/monthly-lawn-care
-  - https://content.ces.ncsu.edu/zoysiagrass-lawn-maintenance-calendar
   - https://theturfgrassgroup.com/zeon-zoysia/ultimate-guide-to-zeon-zoysia-maintenance-tips-for-a-healthy-lush-lawn/
+  # --- Clemson HGIC (SC's regional authority — verified live 2026-06-01) ---
+  - https://hgic.clemson.edu/factsheet/zoysiagrass-maintenance-calendar/
+  - https://hgic.clemson.edu/factsheet/zoysiagrass/
+  - https://hgic.clemson.edu/factsheet/fertilizing-lawns/
+  - https://hgic.clemson.edu/factsheet/watering-lawns/
+  - https://hgic.clemson.edu/factsheet/drought/
+  - https://hgic.clemson.edu/factsheet/soil-testing/
+  - https://hgic.clemson.edu/factsheet/managing-weeds-in-warm-season-lawns/
+  - https://hgic.clemson.edu/factsheet/lawn-weed-control-timing-chart/
+  - https://hgic.clemson.edu/factsheet/brown-patch-large-patch-diseases-of-lawns/
+  - https://hgic.clemson.edu/factsheet/white-grub-management-in-turfgrass/
+  - https://hgic.clemson.edu/factsheet/mole-cricket-management-in-turfgrass/
+  - https://hgic.clemson.edu/factsheet/chinch-bugs/
+  # --- NCSU Extension (cross-state warm-season depth) ---
+  - https://content.ces.ncsu.edu/zoysiagrass-lawn-maintenance-calendar
+  - https://content.ces.ncsu.edu/large-patch-in-turf
+  - https://content.ces.ncsu.edu/diseases-of-warm-season-grasses
+  - https://content.ces.ncsu.edu/controlling-sedges-in-landscape-plantings
 
 models:
   # Provider abstraction lives in src/lawn_agents/llm.py; see ADR 0006.
