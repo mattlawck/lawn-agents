@@ -12,7 +12,9 @@ from lawn_agents import planner
 from lawn_agents.config import Settings
 from lawn_agents.models import (
     CalendarItem,
+    ChemicalBrand,
     ChemicalCategory,
+    ChemicalsConfig,
     Citation,
     DroughtSnapshot,
     GeneralCategory,
@@ -205,6 +207,61 @@ class TestRefusalPaths:
         result = planner.plan_month(2026, 7, settings, **_injectables(synthesizer=synth))
         assert result.refused is True
         assert "planner synthesis call failed" in (result.refusal_reason or "").lower()
+
+
+# --- brand bridge ---------------------------------------------------------
+
+
+class TestBrandBridgeInjection:
+    """A brand name in the planner target injects <brand_bridge> (ADR 0007)."""
+
+    def test_brand_in_target_renders_bridge_block(self, settings: Settings) -> None:
+        settings.chemicals = ChemicalsConfig(
+            brands={
+                "Acelepryn": ChemicalBrand(
+                    active_ingredients=["chlorantraniliprole"],
+                    category=ChemicalCategory.INSECTICIDE,
+                    notes="Syngenta professional product.",
+                )
+            }
+        )
+        rec = _good_plan()
+        synth = FakeChatModel(structured_responses=[rec])
+        planner._synthesize_plan_with_guardrail(
+            scope="month",
+            target="July 2026 — plan around Acelepryn cycle",
+            conditions=planner._fetch_conditions(  # type: ignore[attr-defined]
+                settings.app,
+                lambda _c: _weather_snapshot(),
+                lambda _c: _soil_snapshot(),
+                lambda _c: _drought_snapshot(),
+            ),
+            passages=_passages(),
+            chemicals=settings.chemicals,
+            synthesizer=synth,
+        )
+        _, user_prompt = synth.structured_calls[0]
+        assert "<brand_bridge>" in user_prompt
+        assert "Acelepryn" in user_prompt
+        assert "chlorantraniliprole" in user_prompt
+
+    def test_no_brand_in_target_omits_bridge_block(self, settings: Settings) -> None:
+        # Default settings.chemicals from config.example.yaml — but even
+        # with a populated chemicals config, a target without a brand
+        # name produces no bridge.
+        settings.chemicals = ChemicalsConfig(
+            brands={
+                "GrubX": ChemicalBrand(
+                    active_ingredients=["chlorantraniliprole"],
+                    category=ChemicalCategory.INSECTICIDE,
+                )
+            }
+        )
+        rec = _good_plan()
+        synth = FakeChatModel(structured_responses=[rec])
+        planner.plan_month(2026, 7, settings, **_injectables(synthesizer=synth))
+        _, user_prompt = synth.structured_calls[0]
+        assert "<brand_bridge>" not in user_prompt
 
 
 # --- retrieval query ------------------------------------------------------
