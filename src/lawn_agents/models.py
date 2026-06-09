@@ -221,3 +221,26 @@ class Recommendation(BaseModel):
         description="True when the synthesizer refused to recommend due to missing citations.",
     )
     refusal_reason: str | None = None
+
+
+class ChemicalBrand(BaseModel):
+    """A retail brand mapped to its active ingredient(s).
+
+    The synthesizer reads extension publications, which discuss chemicals
+    by active ingredient; users ask questions by brand. This model is one
+    entry in the brand → active-ingredient bridge (ADR 0007).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    active_ingredients: list[str] = Field(min_length=1)
+    category: ChemicalCategory
+    notes: str | None = None
+
+
+class ChemicalsConfig(BaseModel):
+    """Brand → active-ingredient lookup, loaded from `data/chemicals.yaml`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    brands: dict[str, ChemicalBrand] = Field(default_factory=dict)

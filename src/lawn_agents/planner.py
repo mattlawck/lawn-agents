@@ -29,7 +29,12 @@ from lawn_agents.agents import drought, knowledge, soiltemp, weather
 from lawn_agents.llm import build_chat_model
 from lawn_agents.logging import get_logger
 from lawn_agents.models import Recommendation
-from lawn_agents.orchestrator import _fetch_conditions, _safe_retrieve
+from lawn_agents.orchestrator import (
+    _brand_bridge_text,
+    _fetch_conditions,
+    _safe_retrieve,
+    detect_brands_in_question,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -37,6 +42,7 @@ if TYPE_CHECKING:
     from lawn_agents.config import AppConfig, Settings
     from lawn_agents.llm import ChatModel
     from lawn_agents.models import (
+        ChemicalsConfig,
         Conditions,
         DroughtSnapshot,
         Passage,
@@ -158,6 +164,7 @@ def _plan(
         target=target,
         conditions=conditions,
         passages=passages,
+        chemicals=settings.chemicals,
         synthesizer=synth_chat,
     )
 
@@ -181,10 +188,12 @@ def _synthesize_plan_with_guardrail(
     target: str,
     conditions: Conditions,
     passages: list[Passage],
+    chemicals: ChemicalsConfig,
     synthesizer: ChatModel,
 ) -> Recommendation:
     system = _load_prompt("planner.md")
-    user_prompt = _planner_user_prompt(scope, target, conditions, passages)
+    brand_bridge = _brand_bridge_text(detect_brands_in_question(target, chemicals))
+    user_prompt = _planner_user_prompt(scope, target, conditions, passages, brand_bridge)
 
     try:
         return synthesizer.complete_structured(
@@ -223,11 +232,13 @@ def _planner_user_prompt(
     target: str,
     conditions: Conditions,
     passages: list[Passage],
+    brand_bridge: str = "",
 ) -> str:
     now = datetime.now(UTC).date().isoformat()
+    brand_block = f"\n\n{brand_bridge}" if brand_bridge else ""
     return (
         f"<today>{now}</today>\n\n"
-        f'<plan_target scope="{scope}">{target}</plan_target>\n\n'
+        f'<plan_target scope="{scope}">{target}</plan_target>{brand_block}\n\n'
         f"<conditions>\n{conditions.model_dump_json(indent=2)}\n</conditions>\n\n"
         f"<sources>\n{_format_sources(passages)}\n</sources>"
     )

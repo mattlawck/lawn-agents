@@ -44,6 +44,12 @@ You will receive, in this order:
 - `<conditions>` — JSON-serialized `Conditions` object.
 - `<question>` — the user's natural-language question or the
   scheduled-check trigger.
+- `<brand_bridge>` — *optional*; present only when the question mentions
+  a retail product brand. Each line maps a brand to its active
+  ingredient(s). Treat passages in `<sources>` about an active
+  ingredient as supporting evidence for the corresponding brand. The
+  `Citation` should reference the original passage; the bridge itself
+  is not a source.
 - `<sources>` — a list of retrieved `Passage` objects, each with
   `source_id`, `source_title`, optional `url`/`page`, and the chunk
   content. May be empty.

@@ -10,6 +10,12 @@ You will receive, in this order:
 
 - `<plan_target>` — either `month: YYYY-MM` or `year: YYYY`. Plan
   every action that should land within this window.
+- `<brand_bridge>` — *optional*; present only when the target string
+  mentions a retail product brand. Each line maps a brand to its
+  active ingredient(s). Treat passages in `<sources>` about an active
+  ingredient as supporting evidence for the corresponding brand. The
+  `Citation` should reference the original passage; the bridge itself
+  is not a source.
 - `<conditions>` — JSON-serialized `Conditions` object including
   current weather, soil temperature + moisture, and the current
   drought level for the configured county. The `as_of` timestamp is

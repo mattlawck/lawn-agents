@@ -19,6 +19,7 @@ Provider selection (Gemini vs. Anthropic) is decoupled behind the
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -28,7 +29,7 @@ from pydantic import ValidationError
 from lawn_agents.agents import drought, knowledge, research, soiltemp, weather
 from lawn_agents.llm import build_chat_model, parse_router_intent
 from lawn_agents.logging import get_logger
-from lawn_agents.models import Conditions, Recommendation
+from lawn_agents.models import ChemicalBrand, ChemicalsConfig, Conditions, Recommendation
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -139,6 +140,7 @@ def answer(
         intent=intent,
         conditions=conditions,
         passages=passages,
+        chemicals=settings.chemicals,
         synthesizer=synthesizer_chat,
     )
 
@@ -247,10 +249,12 @@ def _synthesize_with_guardrail(
     intent: Intent,
     conditions: Conditions,
     passages: list[Passage],
+    chemicals: ChemicalsConfig,
     synthesizer: ChatModel,
 ) -> Recommendation:
     system = _load_prompt("synthesizer.md")
-    user_prompt = _synthesizer_user_prompt(question, intent, conditions, passages)
+    brand_bridge = _brand_bridge_text(detect_brands_in_question(question, chemicals))
+    user_prompt = _synthesizer_user_prompt(question, intent, conditions, passages, brand_bridge)
 
     try:
         return synthesizer.complete_structured(
@@ -291,13 +295,56 @@ def _synthesizer_user_prompt(
     intent: Intent,
     conditions: Conditions,
     passages: list[Passage],
+    brand_bridge: str = "",
 ) -> str:
+    brand_block = f"\n\n{brand_bridge}" if brand_bridge else ""
     return (
         f"<intent>{intent}</intent>\n\n"
         f"<conditions>\n{conditions.model_dump_json(indent=2)}\n</conditions>\n\n"
-        f"<question>{question}</question>\n\n"
+        f"<question>{question}</question>{brand_block}\n\n"
         f"<sources>\n{_format_sources(passages)}\n</sources>"
     )
+
+
+def detect_brands_in_question(
+    question: str, chemicals: ChemicalsConfig
+) -> dict[str, ChemicalBrand]:
+    """Return chemical brands from `chemicals.brands` mentioned in `question`.
+
+    Case-insensitive, word-boundary match. Brand names containing spaces
+    are matched as exact phrases. Used by the orchestrator + planner to
+    inject a brand → active-ingredient bridge into the synthesizer
+    prompt; see ADR 0007.
+    """
+    matched: dict[str, ChemicalBrand] = {}
+    q_lower = question.lower()
+    for name, brand in chemicals.brands.items():
+        pattern = r"\b" + re.escape(name.lower()) + r"\b"
+        if re.search(pattern, q_lower):
+            matched[name] = brand
+    return matched
+
+
+def _brand_bridge_text(matched: dict[str, ChemicalBrand]) -> str:
+    if not matched:
+        return ""
+    lines = [
+        "<brand_bridge>",
+        (
+            "The question mentions one or more product brands. Each brand's "
+            "active ingredient(s) are listed below. Passages in <sources> "
+            "that discuss an active ingredient apply to the corresponding "
+            "brand. Cite the passage, not the bridge."
+        ),
+    ]
+    for name, brand in sorted(matched.items()):
+        ais = ", ".join(brand.active_ingredients)
+        line = f"- {name} ({brand.category.value}): active ingredient(s): {ais}."
+        if brand.notes:
+            line += f" {brand.notes}"
+        lines.append(line)
+    lines.append("</brand_bridge>")
+    return "\n".join(lines)
 
 
 def _format_sources(passages: list[Passage]) -> str:
