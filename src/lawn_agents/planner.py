@@ -33,7 +33,9 @@ from lawn_agents.orchestrator import (
     _brand_bridge_text,
     _fetch_conditions,
     _safe_retrieve,
+    _weed_bridge_text,
     detect_brands_in_question,
+    detect_weeds_in_question,
 )
 
 if TYPE_CHECKING:
@@ -48,6 +50,7 @@ if TYPE_CHECKING:
         Passage,
         SoilSnapshot,
         WeatherSnapshot,
+        WeedsConfig,
     )
 
 log = get_logger(__name__)
@@ -165,6 +168,7 @@ def _plan(
         conditions=conditions,
         passages=passages,
         chemicals=settings.chemicals,
+        weeds=settings.weeds,
         synthesizer=synth_chat,
     )
 
@@ -189,11 +193,15 @@ def _synthesize_plan_with_guardrail(
     conditions: Conditions,
     passages: list[Passage],
     chemicals: ChemicalsConfig,
+    weeds: WeedsConfig,
     synthesizer: ChatModel,
 ) -> Recommendation:
     system = _load_prompt("planner.md")
     brand_bridge = _brand_bridge_text(detect_brands_in_question(target, chemicals))
-    user_prompt = _planner_user_prompt(scope, target, conditions, passages, brand_bridge)
+    weed_bridge = _weed_bridge_text(detect_weeds_in_question(target, weeds))
+    user_prompt = _planner_user_prompt(
+        scope, target, conditions, passages, brand_bridge, weed_bridge
+    )
 
     try:
         return synthesizer.complete_structured(
@@ -233,12 +241,14 @@ def _planner_user_prompt(
     conditions: Conditions,
     passages: list[Passage],
     brand_bridge: str = "",
+    weed_bridge: str = "",
 ) -> str:
     now = datetime.now(UTC).date().isoformat()
-    brand_block = f"\n\n{brand_bridge}" if brand_bridge else ""
+    bridges = "\n\n".join(b for b in (brand_bridge, weed_bridge) if b)
+    bridge_block = f"\n\n{bridges}" if bridges else ""
     return (
         f"<today>{now}</today>\n\n"
-        f'<plan_target scope="{scope}">{target}</plan_target>{brand_block}\n\n'
+        f'<plan_target scope="{scope}">{target}</plan_target>{bridge_block}\n\n'
         f"<conditions>\n{conditions.model_dump_json(indent=2)}\n</conditions>\n\n"
         f"<sources>\n{_format_sources(passages)}\n</sources>"
     )

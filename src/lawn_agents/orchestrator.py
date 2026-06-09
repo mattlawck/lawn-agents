@@ -29,7 +29,14 @@ from pydantic import ValidationError
 from lawn_agents.agents import drought, knowledge, research, soiltemp, weather
 from lawn_agents.llm import build_chat_model, parse_router_intent
 from lawn_agents.logging import get_logger
-from lawn_agents.models import ChemicalBrand, ChemicalsConfig, Conditions, Recommendation
+from lawn_agents.models import (
+    ChemicalBrand,
+    ChemicalsConfig,
+    Conditions,
+    Recommendation,
+    WeedAlias,
+    WeedsConfig,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -141,6 +148,7 @@ def answer(
         conditions=conditions,
         passages=passages,
         chemicals=settings.chemicals,
+        weeds=settings.weeds,
         synthesizer=synthesizer_chat,
     )
 
@@ -250,11 +258,15 @@ def _synthesize_with_guardrail(
     conditions: Conditions,
     passages: list[Passage],
     chemicals: ChemicalsConfig,
+    weeds: WeedsConfig,
     synthesizer: ChatModel,
 ) -> Recommendation:
     system = _load_prompt("synthesizer.md")
     brand_bridge = _brand_bridge_text(detect_brands_in_question(question, chemicals))
-    user_prompt = _synthesizer_user_prompt(question, intent, conditions, passages, brand_bridge)
+    weed_bridge = _weed_bridge_text(detect_weeds_in_question(question, weeds))
+    user_prompt = _synthesizer_user_prompt(
+        question, intent, conditions, passages, brand_bridge, weed_bridge
+    )
 
     try:
         return synthesizer.complete_structured(
@@ -296,12 +308,14 @@ def _synthesizer_user_prompt(
     conditions: Conditions,
     passages: list[Passage],
     brand_bridge: str = "",
+    weed_bridge: str = "",
 ) -> str:
-    brand_block = f"\n\n{brand_bridge}" if brand_bridge else ""
+    bridges = "\n\n".join(b for b in (brand_bridge, weed_bridge) if b)
+    bridge_block = f"\n\n{bridges}" if bridges else ""
     return (
         f"<intent>{intent}</intent>\n\n"
         f"<conditions>\n{conditions.model_dump_json(indent=2)}\n</conditions>\n\n"
-        f"<question>{question}</question>{brand_block}\n\n"
+        f"<question>{question}</question>{bridge_block}\n\n"
         f"<sources>\n{_format_sources(passages)}\n</sources>"
     )
 
@@ -344,6 +358,46 @@ def _brand_bridge_text(matched: dict[str, ChemicalBrand]) -> str:
             line += f" {brand.notes}"
         lines.append(line)
     lines.append("</brand_bridge>")
+    return "\n".join(lines)
+
+
+def detect_weeds_in_question(question: str, weeds: WeedsConfig) -> dict[str, WeedAlias]:
+    """Return weed common names from `weeds.weeds` mentioned in `question`.
+
+    Case-insensitive, word-boundary match. Names containing spaces are
+    matched as exact phrases. Used by the orchestrator + planner to
+    inject a weed common-name → alias bridge into the synthesizer
+    prompt; see ADR 0008.
+    """
+    matched: dict[str, WeedAlias] = {}
+    q_lower = question.lower()
+    for name, weed in weeds.weeds.items():
+        pattern = r"\b" + re.escape(name.lower()) + r"\b"
+        if re.search(pattern, q_lower):
+            matched[name] = weed
+    return matched
+
+
+def _weed_bridge_text(matched: dict[str, WeedAlias]) -> str:
+    if not matched:
+        return ""
+    lines = [
+        "<weed_bridge>",
+        (
+            "The question mentions one or more weed common names. Each weed's "
+            "scientific names and label-form aliases are listed below. "
+            "Passages in <sources> that discuss any alias (e.g., scientific "
+            "name or older common name) apply to the user's question. Cite "
+            "the passage, not the bridge."
+        ),
+    ]
+    for name, weed in sorted(matched.items()):
+        aliases = ", ".join(weed.aliases)
+        line = f"- {name} ({weed.category.value}): also called {aliases}."
+        if weed.notes:
+            line += f" {weed.notes}"
+        lines.append(line)
+    lines.append("</weed_bridge>")
     return "\n".join(lines)
 
 

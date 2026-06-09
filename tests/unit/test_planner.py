@@ -22,6 +22,9 @@ from lawn_agents.models import (
     Recommendation,
     SoilSnapshot,
     WeatherSnapshot,
+    WeedAlias,
+    WeedCategory,
+    WeedsConfig,
 )
 from tests.unit.test_orchestrator import FakeChatModel
 
@@ -238,6 +241,7 @@ class TestBrandBridgeInjection:
             ),
             passages=_passages(),
             chemicals=settings.chemicals,
+            weeds=settings.weeds,
             synthesizer=synth,
         )
         _, user_prompt = synth.structured_calls[0]
@@ -262,6 +266,60 @@ class TestBrandBridgeInjection:
         planner.plan_month(2026, 7, settings, **_injectables(synthesizer=synth))
         _, user_prompt = synth.structured_calls[0]
         assert "<brand_bridge>" not in user_prompt
+
+
+# --- weed bridge ----------------------------------------------------------
+
+
+class TestWeedBridgeInjection:
+    """A weed common name in the planner target injects <weed_bridge> (ADR 0008)."""
+
+    def test_weed_in_target_renders_bridge_block(self, settings: Settings) -> None:
+        settings.weeds = WeedsConfig(
+            weeds={
+                "Japanese clover": WeedAlias(
+                    aliases=["Annual lespedeza", "Lespedeza striata"],
+                    category=WeedCategory.BROADLEAF,
+                    notes="Older taxonomy.",
+                )
+            }
+        )
+        rec = _good_plan()
+        synth = FakeChatModel(structured_responses=[rec])
+        planner._synthesize_plan_with_guardrail(
+            scope="month",
+            target="July 2026 — Japanese clover suppression",
+            conditions=planner._fetch_conditions(  # type: ignore[attr-defined]
+                settings.app,
+                lambda _c: _weather_snapshot(),
+                lambda _c: _soil_snapshot(),
+                lambda _c: _drought_snapshot(),
+            ),
+            passages=_passages(),
+            chemicals=settings.chemicals,
+            weeds=settings.weeds,
+            synthesizer=synth,
+        )
+        _, user_prompt = synth.structured_calls[0]
+        assert "<weed_bridge>" in user_prompt
+        assert "Japanese clover" in user_prompt
+        assert "Annual lespedeza" in user_prompt
+        assert "Lespedeza striata" in user_prompt
+
+    def test_no_weed_in_target_omits_bridge_block(self, settings: Settings) -> None:
+        settings.weeds = WeedsConfig(
+            weeds={
+                "Japanese clover": WeedAlias(
+                    aliases=["Annual lespedeza"],
+                    category=WeedCategory.BROADLEAF,
+                )
+            }
+        )
+        rec = _good_plan()
+        synth = FakeChatModel(structured_responses=[rec])
+        planner.plan_month(2026, 7, settings, **_injectables(synthesizer=synth))
+        _, user_prompt = synth.structured_calls[0]
+        assert "<weed_bridge>" not in user_prompt
 
 
 # --- retrieval query ------------------------------------------------------
