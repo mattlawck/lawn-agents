@@ -171,7 +171,15 @@ def fetch_pdf_url_pages(source: IngestSource, client: httpx.Client) -> list[tupl
 
 
 def fetch_url_text(source: IngestSource, client: httpx.Client) -> str:
-    """Fetch a URL and return its main content as plain text (trafilatura)."""
+    r"""Fetch a URL and return its main content as markdown (trafilatura).
+
+    We request `output_format="markdown"` because the default plain-text
+    output collapses to a single line-broken blob (no `\n\n` between
+    sections), which defeats `chunk_text`'s paragraph-based splitter
+    and produces one mega-chunk per page. Markdown preserves real
+    paragraph boundaries plus `##` section headings, which both lift
+    retrieval quality and give the synthesizer useful context.
+    """
     import trafilatura
 
     response = client.get(source.location, follow_redirects=True)
@@ -182,6 +190,7 @@ def fetch_url_text(source: IngestSource, client: httpx.Client) -> str:
         favor_recall=False,
         include_comments=False,
         include_tables=True,
+        output_format="markdown",
     )
     return (extracted or "").strip()
 
@@ -208,9 +217,19 @@ def chunk_text(
     """
     if not text:
         return []
-    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-    if not paragraphs:
+    raw_paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    if not raw_paragraphs:
         return []
+    # Defensive: if a "paragraph" is itself larger than chunk_size_chars
+    # (e.g., a long table cell extracted as one blob, or an extractor
+    # that emits one big block with no \n\n), split it by character
+    # window so we don't silently produce a mega-chunk. Without this
+    # guard, HGIC factsheets in the pre-markdown era produced exactly
+    # one ~19k-char chunk per page, hiding the chemistry section from
+    # retrieval.
+    paragraphs: list[str] = []
+    for para in raw_paragraphs:
+        paragraphs.extend(_split_oversize_paragraph(para, chunk_size_chars))
 
     chunks: list[Chunk] = []
     current = ""
@@ -247,6 +266,26 @@ def chunk_text(
             )
         )
     return chunks
+
+
+def _split_oversize_paragraph(para: str, max_chars: int) -> list[str]:
+    r"""Split a paragraph larger than `max_chars` into bounded pieces.
+
+    Used as a last-resort splitter when `\n\n` boundaries don't bound
+    size. Splits by character window — sentence-aware splitting would be
+    nicer but oversize "paragraphs" in practice are tables/lists where
+    sentence boundaries are absent or unreliable.
+    """
+    if len(para) <= max_chars:
+        return [para]
+    pieces: list[str] = []
+    i = 0
+    while i < len(para):
+        piece = para[i : i + max_chars].strip()
+        if piece:
+            pieces.append(piece)
+        i += max_chars
+    return pieces
 
 
 def _make_chunk(

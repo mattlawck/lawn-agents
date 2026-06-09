@@ -193,6 +193,28 @@ class TestChunkText:
         b = chunk_text("hello\n\nworld", **kwargs)
         assert [c.id for c in a] == [c.id for c in b]
 
+    def test_oversize_single_paragraph_splits_by_char_window(self) -> None:
+        """Regression: a paragraph larger than chunk_size_chars must split.
+
+        Pre-fix, HGIC factsheets extracted as a single 19k-char blob
+        produced exactly one mega-chunk per page, hiding the chemistry
+        section from retrieval. The chunker now splits oversize
+        paragraphs by character window as a last resort.
+        """
+        single_blob = "x" * 8000  # no \n\n boundaries at all
+        chunks = chunk_text(
+            single_blob,
+            source_id="t",
+            source_title="t",
+            chunk_size_chars=2800,
+            chunk_overlap_chars=400,
+        )
+        assert len(chunks) >= 3  # 8000 chars / 2800 ~ 3 minimum
+        # Each chunk's content stays bounded: size_chars + overlap + a
+        # tiny slack for the "\n\n" paragraph separator.
+        for c in chunks:
+            assert len(c.content) <= 2800 + 400 + 16
+
     def test_chunk_carries_provenance(self) -> None:
         chunks = chunk_text(
             "para",
@@ -304,6 +326,47 @@ class TestFetchUrlText:
         assert "pre-emergent" in text.lower()
         assert "skip me" not in text.lower()  # nav stripped
         assert "copyright" not in text.lower()  # footer stripped
+
+    def test_preserves_paragraph_boundaries_for_multi_section_pages(self) -> None:
+        """Regression: HGIC-style multi-section pages must yield multiple paragraphs.
+
+        Pre-fix, trafilatura's plain-text output collapsed multi-section
+        pages into a single line-broken blob with no `\\n\\n`. That
+        defeated `chunk_text`'s paragraph splitter and produced one
+        mega-chunk. Markdown output preserves real paragraph + heading
+        boundaries.
+        """
+        html = """
+        <html>
+          <body>
+            <article>
+              <h1>White Grub Management</h1>
+              <p>White grubs are the larval stage of several scarab beetles.</p>
+              <h2>Insect Life Cycle</h2>
+              <p>All of these beetles go through four distinct forms.</p>
+              <h2>Chemical Control</h2>
+              <p>Several insecticides are labeled for use, including chlorantraniliprole.</p>
+            </article>
+          </body>
+        </html>
+        """
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=html, headers={"content-type": "text/html"})
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        source = IngestSource(
+            kind="url",
+            location="https://example.com/grubs",
+            source_id="url:https://example.com/grubs",
+            source_title="example.com/grubs",
+        )
+        text = fetch_url_text(source, client)
+        # Markdown output puts real \n\n between sections and ## on h2's.
+        paragraphs = [p for p in text.split("\n\n") if p.strip()]
+        assert len(paragraphs) >= 4  # h1 + 2 h2 + ≥3 body paragraphs
+        assert "chlorantraniliprole" in text.lower()
+        assert "## " in text  # h2 headings preserved as markdown
 
 
 # --- end-to-end ingest -----------------------------------------------------
