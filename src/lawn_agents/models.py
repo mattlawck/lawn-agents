@@ -244,3 +244,40 @@ class ChemicalsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     brands: dict[str, ChemicalBrand] = Field(default_factory=dict)
+
+
+class WeedCategory(StrEnum):
+    """Broad agronomic category of a turf weed.
+
+    Used by `WeedAlias` to help the synthesizer pick a chemistry of the
+    right action type (broadleaf vs grassy vs sedge herbicides).
+    """
+
+    BROADLEAF = "broadleaf"
+    GRASSY = "grassy"
+    SEDGE = "sedge"
+
+
+class WeedAlias(BaseModel):
+    """A weed common name mapped to its scientific + label-form aliases.
+
+    The synthesizer reads extension publications and manufacturer labels,
+    which discuss weeds by scientific name (`Lespedeza striata`) or by
+    older common-name forms (`annual lespedeza`); users ask questions by
+    everyday English (`Japanese clover`). This model is one entry in
+    the weed common-name bridge (ADR 0008).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    aliases: list[str] = Field(min_length=1)
+    category: WeedCategory
+    notes: str | None = None
+
+
+class WeedsConfig(BaseModel):
+    """Common-name → alias lookup, loaded from `data/weeds.yaml`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    weeds: dict[str, WeedAlias] = Field(default_factory=dict)

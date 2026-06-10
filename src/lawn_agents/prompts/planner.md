@@ -16,6 +16,11 @@ You will receive, in this order:
   ingredient as supporting evidence for the corresponding brand. The
   `Citation` should reference the original passage; the bridge itself
   is not a source.
+- `<weed_bridge>` — *optional*; present only when the target string
+  mentions a known weed common name. Each line maps a common name to
+  scientific names and label-form aliases. Treat passages in
+  `<sources>` that discuss any alias as supporting evidence for the
+  user's target. Cite the passage, not the bridge.
 - `<conditions>` — JSON-serialized `Conditions` object including
   current weather, soil temperature + moisture, and the current
   drought level for the configured county. The `as_of` timestamp is

@@ -29,7 +29,14 @@ from pydantic import ValidationError
 from lawn_agents.agents import drought, knowledge, research, soiltemp, weather
 from lawn_agents.llm import build_chat_model, parse_router_intent
 from lawn_agents.logging import get_logger
-from lawn_agents.models import ChemicalBrand, ChemicalsConfig, Conditions, Recommendation
+from lawn_agents.models import (
+    ChemicalBrand,
+    ChemicalsConfig,
+    Conditions,
+    Recommendation,
+    WeedAlias,
+    WeedsConfig,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -127,11 +134,16 @@ def answer(
         )
 
     conditions = _fetch_conditions(settings.app, wfn, sfn, dfn)
-    passages = _safe_retrieve(question, settings.app, rfn)
+    weed_matches = detect_weeds_in_question(question, settings.weeds)
+    passages = _retrieve_with_weed_aliases(question, weed_matches, settings.app, rfn)
 
     if settings.app.research.enabled and knowledge.is_weak(passages, settings.app):
         log.info("orchestrator.retrieval_weak.invoking_research")
-        researched = _safe_research(question, settings.app, research_call)
+        researched = _safe_research(
+            expand_query_with_weed_aliases(question, weed_matches),
+            settings.app,
+            research_call,
+        )
         if researched:
             passages = researched
 
@@ -141,6 +153,8 @@ def answer(
         conditions=conditions,
         passages=passages,
         chemicals=settings.chemicals,
+        weeds=settings.weeds,
+        weed_matches=weed_matches,
         synthesizer=synthesizer_chat,
     )
 
@@ -226,6 +240,69 @@ def _safe_retrieve(
         return []
 
 
+RRF_K = 60  # Standard RRF constant from the original Cormack et al. 2009 paper.
+
+
+def _retrieve_with_weed_aliases(
+    question: str,
+    matched: dict[str, WeedAlias],
+    config: AppConfig,
+    retrieve_fn: Callable[[str, AppConfig], list[Passage]],
+) -> list[Passage]:
+    """Multi-query retrieval with Reciprocal Rank Fusion.
+
+    Concatenating a long question with rare technical terms dilutes
+    the embedding — the prose dominates and the label drops out of
+    top-k. Probed on the 2026-06-09 corpus: "Lespedeza striata"
+    alone surfaces the Bayer Celsius label at score 0.601 (top hit),
+    but "I have Japanese clover ... Lespedeza striata Kummerowia
+    striata" drops the label out of top-8.
+
+    Score-based max-merge ALSO doesn't work, because BGE scores aren't
+    comparable across queries: 0.694 on the prosey question vs 0.601
+    on an alias-only query doesn't mean the prosey result is more
+    relevant — they're scored on different queries.
+
+    Reciprocal Rank Fusion (RRF) is the canonical solution: each
+    chunk's fused score is `sum(1 / (RRF_K + rank))` across queries
+    that returned it. Rank-based, so scale-invariant. Chunks that
+    appear in multiple queries get a boost; chunks that appear in
+    only one query at a high rank still surface. We then sort by the
+    fused score and return top-rerank_top_k. The synthesizer still
+    sees the original question via `<question>`; only retrieval is
+    widened.
+
+    When `matched` is empty, this is a single-query path equivalent
+    to `_safe_retrieve` — zero behavior change for non-weed questions.
+    """
+    queries: list[str] = [question]
+    for weed in matched.values():
+        queries.append(" ".join(weed.aliases))
+
+    # If no aliases, skip RRF and return the raw retrieval — preserves
+    # exact behavior for non-weed questions.
+    if len(queries) == 1:
+        return _safe_retrieve(question, config, retrieve_fn)
+
+    # Dedupe by (source_id, content) — chunks are content-addressed at
+    # ingest time, so identical content means the same chunk.
+    fused_scores: dict[tuple[str, str], float] = {}
+    passage_by_key: dict[tuple[str, str], Passage] = {}
+    for q in queries:
+        for rank, p in enumerate(_safe_retrieve(q, config, retrieve_fn), start=1):
+            key = (p.source_id, p.content)
+            fused_scores[key] = fused_scores.get(key, 0.0) + 1.0 / (RRF_K + rank)
+            # Keep the passage instance with the highest raw score, so
+            # downstream consumers see a meaningful per-chunk score.
+            existing = passage_by_key.get(key)
+            if existing is None or p.score > existing.score:
+                passage_by_key[key] = p
+
+    ranked_keys = sorted(fused_scores.keys(), key=lambda k: fused_scores[k], reverse=True)
+    top_k = config.knowledge.retrieval.rerank_top_k
+    return [passage_by_key[k] for k in ranked_keys[:top_k]]
+
+
 def _safe_research(
     question: str,
     config: AppConfig,
@@ -250,11 +327,21 @@ def _synthesize_with_guardrail(
     conditions: Conditions,
     passages: list[Passage],
     chemicals: ChemicalsConfig,
+    weeds: WeedsConfig,
+    weed_matches: dict[str, WeedAlias] | None = None,
     synthesizer: ChatModel,
 ) -> Recommendation:
     system = _load_prompt("synthesizer.md")
     brand_bridge = _brand_bridge_text(detect_brands_in_question(question, chemicals))
-    user_prompt = _synthesizer_user_prompt(question, intent, conditions, passages, brand_bridge)
+    # Caller may have already detected weeds (for retrieval-query expansion);
+    # re-use that work to avoid a second regex scan.
+    weed_matches = (
+        weed_matches if weed_matches is not None else detect_weeds_in_question(question, weeds)
+    )
+    weed_bridge = _weed_bridge_text(weed_matches)
+    user_prompt = _synthesizer_user_prompt(
+        question, intent, conditions, passages, brand_bridge, weed_bridge
+    )
 
     try:
         return synthesizer.complete_structured(
@@ -296,12 +383,14 @@ def _synthesizer_user_prompt(
     conditions: Conditions,
     passages: list[Passage],
     brand_bridge: str = "",
+    weed_bridge: str = "",
 ) -> str:
-    brand_block = f"\n\n{brand_bridge}" if brand_bridge else ""
+    bridges = "\n\n".join(b for b in (brand_bridge, weed_bridge) if b)
+    bridge_block = f"\n\n{bridges}" if bridges else ""
     return (
         f"<intent>{intent}</intent>\n\n"
         f"<conditions>\n{conditions.model_dump_json(indent=2)}\n</conditions>\n\n"
-        f"<question>{question}</question>{brand_block}\n\n"
+        f"<question>{question}</question>{bridge_block}\n\n"
         f"<sources>\n{_format_sources(passages)}\n</sources>"
     )
 
@@ -344,6 +433,66 @@ def _brand_bridge_text(matched: dict[str, ChemicalBrand]) -> str:
             line += f" {brand.notes}"
         lines.append(line)
     lines.append("</brand_bridge>")
+    return "\n".join(lines)
+
+
+def detect_weeds_in_question(question: str, weeds: WeedsConfig) -> dict[str, WeedAlias]:
+    """Return weed common names from `weeds.weeds` mentioned in `question`.
+
+    Case-insensitive, word-boundary match. Names containing spaces are
+    matched as exact phrases. Used by the orchestrator + planner to
+    inject a weed common-name → alias bridge into the synthesizer
+    prompt; see ADR 0008.
+    """
+    matched: dict[str, WeedAlias] = {}
+    q_lower = question.lower()
+    for name, weed in weeds.weeds.items():
+        pattern = r"\b" + re.escape(name.lower()) + r"\b"
+        if re.search(pattern, q_lower):
+            matched[name] = weed
+    return matched
+
+
+def expand_query_with_weed_aliases(question: str, matched: dict[str, WeedAlias]) -> str:
+    """Append weed aliases to the retrieval query so the label surfaces.
+
+    The bridge tells the *synthesizer* about common→technical name
+    aliases, but retrieval still embeds the raw question. BGE-small
+    similarity between "Japanese clover" and "Annual lespedeza" is
+    weak, so the Bayer Celsius WG label (which uses the older form) is
+    never retrieved on the homeowner phrasing. Appending the aliases
+    to the retrieval query brings the label into top-k. The
+    synthesizer still sees the original question via the `<question>`
+    block — only the retrieval path is widened.
+    """
+    if not matched:
+        return question
+    extra_terms: list[str] = []
+    for weed in matched.values():
+        extra_terms.extend(weed.aliases)
+    return f"{question} {' '.join(extra_terms)}"
+
+
+def _weed_bridge_text(matched: dict[str, WeedAlias]) -> str:
+    if not matched:
+        return ""
+    lines = [
+        "<weed_bridge>",
+        (
+            "The question mentions one or more weed common names. Each weed's "
+            "scientific names and label-form aliases are listed below. "
+            "Passages in <sources> that discuss any alias (e.g., scientific "
+            "name or older common name) apply to the user's question. Cite "
+            "the passage, not the bridge."
+        ),
+    ]
+    for name, weed in sorted(matched.items()):
+        aliases = ", ".join(weed.aliases)
+        line = f"- {name} ({weed.category.value}): also called {aliases}."
+        if weed.notes:
+            line += f" {weed.notes}"
+        lines.append(line)
+    lines.append("</weed_bridge>")
     return "\n".join(lines)
 
 
