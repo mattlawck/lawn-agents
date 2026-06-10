@@ -88,7 +88,27 @@ class TestSeededChemicalsFile:
 
     def test_seeded_set_covers_all_chemical_categories(self, chemicals: ChemicalsConfig) -> None:
         categories = {b.category.value for b in chemicals.brands.values()}
-        assert categories == {"insecticide", "herbicide", "fungicide"}
+        assert categories == {"insecticide", "herbicide", "fungicide", "fertilizer"}
+
+    def test_milorganite_present_with_correct_npk(self, chemicals: ChemicalsConfig) -> None:
+        """Milorganite is 6-4-0 (reformulated from 5-3-0 around 2024).
+
+        The notes field is the load-bearing one for drought-fertilization
+        questions: it captures the low-salt / low-burn-risk property that
+        differentiates biosolids from synthetic fast-release urea.
+        """
+        brand = chemicals.brands["Milorganite"]
+        assert brand.category.value == "fertilizer"
+        assert "nitrogen" in brand.active_ingredients
+        assert brand.notes is not None
+        assert "6-4-0" in brand.notes
+        assert "low salt index" in brand.notes.lower() or "low-salt" in brand.notes.lower()
+
+    def test_sta_green_16_0_10_present(self, chemicals: ChemicalsConfig) -> None:
+        brand = chemicals.brands["Sta-Green 16-0-10"]
+        assert brand.category.value == "fertilizer"
+        assert brand.notes is not None
+        assert "16-0-10" in brand.notes
 
 
 class TestSettingsLoadsChemicals:

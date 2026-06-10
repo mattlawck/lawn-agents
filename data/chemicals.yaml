@@ -79,3 +79,31 @@ brands:
     active_ingredients: ["thiophanate-methyl"]
     category: fungicide
     notes: "Cleary's 3336; systemic fungicide for brown / large patch."
+
+  # --- Fertilizers (slow-release / organic / synthetic) ---
+  #
+  # `active_ingredients` here lists the primary nutrients delivered (N, P, K,
+  # iron, etc.) so the synthesizer recognizes the product as a fertilizer of
+  # the right NPK family. The release type + burn-risk profile lives in
+  # `notes` — this is the property that matters most for drought / stress
+  # decisions, and it's the gap that caused the synthesizer to be overly
+  # cautious about Milorganite during D3 drought (PR-comments 2026-06-09).
+  "Milorganite":
+    active_ingredients: ["nitrogen", "phosphorus", "iron"]
+    category: fertilizer
+    notes: "6-4-0 plus iron; slow-release biosolids from Milwaukee MMSD. Very low salt index — burn risk is minimal even on stressed / drought-affected turf. Reformulated from 5-3-0 around 2024; older references may list the previous NPK."
+
+  "Sta-Green 16-0-10":
+    active_ingredients: ["nitrogen", "potassium"]
+    category: fertilizer
+    notes: "16-0-10 slow-release synthetic (Lowe's brand). Slow N release keeps soluble salt concentration low, lower burn risk than fast-release urea but higher than organic biosolids. 20 lb bag covers ~4,000 sqft at the label rate."
+
+  "Scotts Turf Builder":
+    active_ingredients: ["nitrogen", "phosphorus", "potassium"]
+    category: fertilizer
+    notes: "Scotts consumer brand; NPK varies by SKU (commonly 32-0-4, 28-0-3). Typically partially slow-release urea + AS blends. Moderate burn risk on stressed turf — read the specific SKU label."
+
+  "Ironite":
+    active_ingredients: ["iron", "nitrogen"]
+    category: fertilizer
+    notes: "Iron supplement for green-up; mineral product (1-0-1 plus iron). Low N content means low burn risk. Often paired with a real fertilizer rather than used alone."
