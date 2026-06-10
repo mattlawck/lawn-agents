@@ -137,11 +137,27 @@ class AnthropicChat:
         self._model = model
 
     def complete_text(self, *, system: str, user: str) -> str:
-        """See `ChatModel.complete_text`."""
+        """See `ChatModel.complete_text`.
+
+        Sends `system` as a list with `cache_control: ephemeral` so the
+        SDK caches the system prompt server-side. Cache reads bill at
+        0.1x the base input rate; cache writes at 1.25x (5-min TTL).
+        Below the model's minimum cacheable-token threshold (1024 for
+        Sonnet 4.6, 4096 for Opus 4.7), Anthropic silently ignores the
+        flag — no error, no benefit. See `_log_anthropic_usage` for
+        `cache_read_input_tokens` / `cache_creation_input_tokens`
+        observability.
+        """
         response = self._client.messages.create(
             model=self._model,
             max_tokens=1024,
-            system=system,
+            system=[
+                {
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
             messages=[{"role": "user", "content": user}],
         )
         _log_anthropic_usage(self._model, "complete_text", response)
@@ -153,19 +169,33 @@ class AnthropicChat:
     def complete_structured[T: BaseModel](
         self, *, system: str, user: str, response_model: type[T]
     ) -> T:
-        """See `ChatModel.complete_structured`."""
+        """See `ChatModel.complete_structured`.
+
+        Both the system prompt and the tool definition carry
+        `cache_control: ephemeral`. Per Anthropic's docs, tools are
+        cached as one unit and live above system in the cache
+        hierarchy; placing the breakpoint on the (single) tool caches
+        the whole tools block. The system block caches independently.
+        """
         tool_name = "respond"
         tool_schema = response_model.model_json_schema()
         response = self._client.messages.create(
             model=self._model,
             max_tokens=4096,
-            system=system,
+            system=[
+                {
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
             messages=[{"role": "user", "content": user}],
             tools=[
                 {
                     "name": tool_name,
                     "description": "Return the structured response.",
                     "input_schema": tool_schema,
+                    "cache_control": {"type": "ephemeral"},
                 }
             ],
             tool_choice={"type": "tool", "name": tool_name},
