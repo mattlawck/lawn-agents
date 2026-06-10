@@ -246,6 +246,109 @@ class _FakeAnthropicResponse:
         self._request_id = "req_test_123"
 
 
+class _FakeAnthropicTextBlock:
+    type = "text"
+    text = "ad-hoc"
+
+
+class _FakeAnthropicToolUseBlock:
+    type = "tool_use"
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.input = payload
+
+
+class _FakeAnthropicResponseShape:
+    """Minimal stub matching the bits of `Message` our adapter consumes."""
+
+    def __init__(self, content: list[Any]) -> None:
+        self.content = content
+        self.usage = _FakeAnthropicUsage()
+        self._request_id = "req_test_abc"
+
+
+class _FakeAnthropicMessages:
+    def __init__(self, response: _FakeAnthropicResponseShape) -> None:
+        self._response = response
+        self.last_kwargs: dict[str, Any] | None = None
+
+    def create(self, **kwargs: Any) -> _FakeAnthropicResponseShape:
+        self.last_kwargs = kwargs
+        return self._response
+
+
+class _FakeAnthropicClient:
+    def __init__(self, response: _FakeAnthropicResponseShape) -> None:
+        self.messages = _FakeAnthropicMessages(response)
+
+
+class TestAnthropicPromptCaching:
+    """`AnthropicChat` must send system + tools with `cache_control: ephemeral`.
+
+    Cache reads bill at 0.1x base input cost (per Anthropic docs). The
+    SDK silently ignores `cache_control` when the prompt is below the
+    minimum cacheable-token threshold, so we always tag it — no code
+    complexity for threshold management. See ADR 0006 + PR description.
+    """
+
+    def _build_adapter_with_text(self) -> tuple[AnthropicChat, _FakeAnthropicMessages]:
+        adapter = AnthropicChat(api_key="sk-ant-test-dummy", model="claude-sonnet-4-6")
+        fake = _FakeAnthropicClient(
+            _FakeAnthropicResponseShape(content=[_FakeAnthropicTextBlock()])
+        )
+        adapter._client = fake  # type: ignore[assignment]
+        return adapter, fake.messages
+
+    def _build_adapter_with_tool_use(
+        self, payload: dict[str, Any]
+    ) -> tuple[AnthropicChat, _FakeAnthropicMessages]:
+        adapter = AnthropicChat(api_key="sk-ant-test-dummy", model="claude-sonnet-4-6")
+        fake = _FakeAnthropicClient(
+            _FakeAnthropicResponseShape(content=[_FakeAnthropicToolUseBlock(payload)])
+        )
+        adapter._client = fake  # type: ignore[assignment]
+        return adapter, fake.messages
+
+    def test_complete_text_sends_system_as_cached_block(self) -> None:
+        adapter, fake = self._build_adapter_with_text()
+        adapter.complete_text(system="sys instructions", user="q")
+        assert fake.last_kwargs is not None
+        sent_system = fake.last_kwargs["system"]
+        assert isinstance(sent_system, list)
+        assert len(sent_system) == 1
+        block = sent_system[0]
+        assert block["type"] == "text"
+        assert block["text"] == "sys instructions"
+        assert block["cache_control"] == {"type": "ephemeral"}
+
+    def test_complete_structured_caches_system_and_tool(self) -> None:
+        adapter, fake = self._build_adapter_with_tool_use({"headline": "ok", "score": 7})
+        adapter.complete_structured(system="sys", user="q", response_model=_ToyResponse)
+        assert fake.last_kwargs is not None
+        sent_system = fake.last_kwargs["system"]
+        sent_tools = fake.last_kwargs["tools"]
+
+        # System block carries cache_control.
+        assert sent_system[0]["cache_control"] == {"type": "ephemeral"}
+
+        # Single tool with cache_control on the (last and only) tool definition,
+        # which per Anthropic's docs caches the whole tools block.
+        assert len(sent_tools) == 1
+        assert sent_tools[0]["name"] == "respond"
+        assert sent_tools[0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_complete_text_still_returns_text(self) -> None:
+        adapter, _ = self._build_adapter_with_text()
+        out = adapter.complete_text(system="sys", user="q")
+        assert out == "ad-hoc"
+
+    def test_complete_structured_still_parses_tool_use(self) -> None:
+        adapter, _ = self._build_adapter_with_tool_use({"headline": "ok", "score": 7})
+        result = adapter.complete_structured(system="sys", user="q", response_model=_ToyResponse)
+        assert result.headline == "ok"
+        assert result.score == 7
+
+
 class TestUsageLogging:
     """Each adapter logs token usage (and Anthropic request_id) per call."""
 
