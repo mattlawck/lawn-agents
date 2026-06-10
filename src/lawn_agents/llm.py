@@ -7,6 +7,7 @@ providers is a config-file change. See ADR 0006.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import TYPE_CHECKING, Literal, Protocol
 
@@ -20,6 +21,14 @@ if TYPE_CHECKING:
 ChatRole = Literal["router", "synthesizer"]
 
 log = get_logger(__name__)
+
+# Gemini cache settings. TTL chosen to span a typical homeowner session:
+# enough that running `lawn-agents --ask` a few times in quick succession
+# shares cache hits, short enough that stale prompt content doesn't linger
+# on Google's infra after the user moves on. Storage cost is negligible at
+# our prompt sizes.
+_GEMINI_CACHE_TTL = "3600s"
+_GEMINI_CACHE_DISPLAY_NAME_PREFIX = "lawn-agents-"
 
 
 class ChatModel(Protocol):
@@ -67,15 +76,85 @@ class GeminiChat:
             http_options=types.HttpOptions(retry_options=types.HttpRetryOptions()),
         )
         self._model = model
+        # In-process cache of (system_instruction hash → server-side cache.name).
+        # Populated lazily on first call. See `_get_or_create_system_cache`.
+        self._cache_by_hash: dict[str, str] = {}
+
+    def _get_or_create_system_cache(self, system_instruction: str) -> str | None:
+        """Return cache.name for the system instruction, or None if uncacheable.
+
+        Three reuse tiers:
+        1. **In-process**: same `GeminiChat` instance, same system text → dict hit.
+        2. **Cross-process**: `caches.list()` filtered by `display_name` finds a
+           server-side cache from a prior CLI invocation within the 3600s TTL.
+        3. **Create**: no existing cache → `caches.create()` with the hash as
+           `display_name` so future invocations can find this one.
+
+        Returns None if cache creation fails. The most common reason is the
+        2,048-token minimum for Gemini 2.5 Flash/Pro: short prompts (e.g., the
+        router system) silently fall through to the uncached path. The caller
+        should pass `system_instruction` directly in that case.
+        """
+        digest = hashlib.sha256(system_instruction.encode("utf-8")).hexdigest()[:16]
+        if digest in self._cache_by_hash:
+            return self._cache_by_hash[digest]
+
+        display_name = f"{_GEMINI_CACHE_DISPLAY_NAME_PREFIX}{digest}"
+
+        try:
+            for cached in self._client.caches.list():
+                if (
+                    getattr(cached, "display_name", None) == display_name
+                    and cached.name is not None
+                ):
+                    self._cache_by_hash[digest] = cached.name
+                    log.info(
+                        "llm.gemini_cache_reused",
+                        model=self._model,
+                        cache_name=cached.name,
+                    )
+                    return cached.name
+        except Exception as exc:
+            log.warning("llm.gemini_cache_list_failed", error=str(exc))
+            # Fall through to creation — listing failure shouldn't block.
+
+        try:
+            from google.genai import types
+
+            cache = self._client.caches.create(
+                model=f"models/{self._model}",
+                config=types.CreateCachedContentConfig(
+                    display_name=display_name,
+                    system_instruction=system_instruction,
+                    ttl=_GEMINI_CACHE_TTL,
+                ),
+            )
+        except Exception as exc:
+            # The 2,048-token minimum is the usual culprit; we don't differentiate
+            # because the fallback is the same in every failure case.
+            log.info("llm.gemini_cache_skip", model=self._model, error=str(exc))
+            return None
+        if cache.name is None:
+            log.warning("llm.gemini_cache_no_name", model=self._model)
+            return None
+        self._cache_by_hash[digest] = cache.name
+        log.info("llm.gemini_cache_created", model=self._model, cache_name=cache.name)
+        return cache.name
 
     def complete_text(self, *, system: str, user: str) -> str:
         """See `ChatModel.complete_text`."""
         from google.genai import types
 
+        cache_name = self._get_or_create_system_cache(system)
+        config = (
+            types.GenerateContentConfig(cached_content=cache_name)
+            if cache_name
+            else types.GenerateContentConfig(system_instruction=system)
+        )
         response = self._client.models.generate_content(
             model=self._model,
             contents=user,
-            config=types.GenerateContentConfig(system_instruction=system),
+            config=config,
         )
         _log_gemini_usage(self._model, "complete_text", response)
         return (response.text or "").strip()
@@ -95,13 +174,22 @@ class GeminiChat:
             "Reply with ONLY a JSON object matching this schema "
             f"(no prose, no code fences):\n{schema_hint}"
         )
+        cache_name = self._get_or_create_system_cache(system_with_schema)
+        config = (
+            types.GenerateContentConfig(
+                cached_content=cache_name,
+                response_mime_type="application/json",
+            )
+            if cache_name
+            else types.GenerateContentConfig(
+                system_instruction=system_with_schema,
+                response_mime_type="application/json",
+            )
+        )
         response = self._client.models.generate_content(
             model=self._model,
             contents=user,
-            config=types.GenerateContentConfig(
-                system_instruction=system_with_schema,
-                response_mime_type="application/json",
-            ),
+            config=config,
         )
         _log_gemini_usage(self._model, "complete_structured", response)
         text = response.text or ""
