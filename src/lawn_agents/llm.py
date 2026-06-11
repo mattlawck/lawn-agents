@@ -7,6 +7,7 @@ providers is a config-file change. See ADR 0006.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 from typing import TYPE_CHECKING, Literal, Protocol
@@ -377,6 +378,74 @@ def _log_anthropic_usage(model: str, op: str, response: object) -> None:
         cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", None),
         cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", None),
     )
+
+
+def classify_llm_error(exc: BaseException) -> tuple[str, str]:
+    """Classify a provider-SDK exception for structlog + user-facing messaging.
+
+    Returns ``(event_suffix, user_reason)``:
+
+    - ``event_suffix`` slots into a structlog event name (e.g.,
+      ``orchestrator.synthesizer_<suffix>``). One value per distinct
+      failure class so dashboards can break down by mode.
+    - ``user_reason`` is the short string that goes into a `Refused`
+      panel — actionable per class (auth → "check API key"; rate-limit
+      → "try again"; server → "API is having issues").
+
+    Keeps SDK imports inside this module so callers (orchestrator,
+    planner) stay decoupled from provider SDKs per ADR 0006. Lazy
+    imports also mean the function doesn't pay the cost of loading a
+    provider SDK that isn't installed.
+
+    Anthropic docs explicitly recommend catching typed SDK classes
+    rather than string-matching error messages:
+    https://platform.claude.com/docs/en/api/errors#sdk-error-types
+    """
+    # Anthropic: import lazily so we don't force a dep load when the
+    # configured provider is Gemini. `contextlib.suppress(ImportError)`
+    # is the idiomatic "this branch is optional if the SDK isn't
+    # installed" pattern — also satisfies CodeQL's `py/empty-except`
+    # check, which can't tell that the `pass` was intentional.
+    with contextlib.suppress(ImportError):
+        import anthropic
+
+        if isinstance(exc, anthropic.AuthenticationError):
+            return ("auth_failed", "API authentication failed; check your ANTHROPIC_API_KEY.")
+        if isinstance(exc, anthropic.PermissionDeniedError):
+            return ("permission_denied", "API key lacks permission for this resource.")
+        if isinstance(exc, anthropic.RateLimitError):
+            return (
+                "rate_limited",
+                "Hit the Anthropic rate limit; try again in a moment.",
+            )
+        if isinstance(exc, anthropic.APIConnectionError):
+            return (
+                "connection_failed",
+                "Could not reach Anthropic; check your network connection.",
+            )
+        if isinstance(exc, anthropic.InternalServerError):
+            return (
+                "server_error",
+                "Anthropic API is having issues; please try again shortly.",
+            )
+        if isinstance(exc, anthropic.BadRequestError):
+            return ("bad_request", f"Anthropic rejected the request: {exc}")
+
+    # Gemini / google-genai.
+    with contextlib.suppress(ImportError):
+        from google.genai import errors as genai_errors
+
+        if isinstance(exc, genai_errors.ServerError):
+            return (
+                "server_error",
+                "Gemini API is having issues; please try again shortly.",
+            )
+        if isinstance(exc, genai_errors.ClientError):
+            return ("client_error", f"Gemini rejected the request: {exc}")
+
+    # Fallback — unknown exception. Caller still gets a structured event
+    # and a meaningful (if generic) refusal reason.
+    return ("call_failed", f"{type(exc).__name__}: {exc}")
 
 
 def parse_router_intent(raw: str) -> str:

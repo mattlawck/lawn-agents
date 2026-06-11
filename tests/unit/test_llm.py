@@ -15,8 +15,94 @@ from lawn_agents.llm import (
     ChatModel,
     GeminiChat,
     build_chat_model,
+    classify_llm_error,
     parse_router_intent,
 )
+
+
+class TestClassifyLlmError:
+    """`classify_llm_error` returns (event_suffix, user_reason) per failure mode.
+
+    Anthropic docs explicitly recommend catching typed SDK classes
+    rather than string-matching error messages. This classifier keeps
+    the orchestrator + planner decoupled from SDK types (per ADR 0006)
+    while still giving discriminated structlog events and actionable
+    user-facing refusal messages.
+    """
+
+    def test_anthropic_authentication_error(self) -> None:
+        import anthropic
+        import httpx
+
+        # Construct via __new__ to skip the SDK's required-args constructor
+        # — we only care about isinstance dispatch in the classifier.
+        exc = anthropic.AuthenticationError.__new__(anthropic.AuthenticationError)
+        Exception.__init__(exc, "bad key")
+        # Required attribute access by some str(exc) paths in newer SDKs.
+        exc.message = "bad key"
+        exc.response = httpx.Response(401)
+        suffix, reason = classify_llm_error(exc)
+        assert suffix == "auth_failed"
+        assert "ANTHROPIC_API_KEY" in reason
+
+    def test_anthropic_rate_limit_error(self) -> None:
+        import anthropic
+        import httpx
+
+        exc = anthropic.RateLimitError.__new__(anthropic.RateLimitError)
+        Exception.__init__(exc, "rate limited")
+        exc.message = "rate limited"
+        exc.response = httpx.Response(429)
+        suffix, reason = classify_llm_error(exc)
+        assert suffix == "rate_limited"
+        assert "try again" in reason.lower()
+
+    def test_anthropic_internal_server_error(self) -> None:
+        import anthropic
+        import httpx
+
+        exc = anthropic.InternalServerError.__new__(anthropic.InternalServerError)
+        Exception.__init__(exc, "5xx")
+        exc.message = "5xx"
+        exc.response = httpx.Response(500)
+        suffix, reason = classify_llm_error(exc)
+        assert suffix == "server_error"
+        assert "Anthropic" in reason
+
+    def test_anthropic_connection_error(self) -> None:
+        import anthropic
+
+        exc = anthropic.APIConnectionError(
+            message="connect failed",
+            request=None,  # type: ignore[arg-type]
+        )
+        suffix, reason = classify_llm_error(exc)
+        assert suffix == "connection_failed"
+        assert "network" in reason.lower()
+
+    def test_gemini_server_error(self) -> None:
+        from google.genai import errors as genai_errors
+
+        exc = genai_errors.ServerError.__new__(genai_errors.ServerError)
+        Exception.__init__(exc, "503 UNAVAILABLE")
+        suffix, reason = classify_llm_error(exc)
+        assert suffix == "server_error"
+        assert "Gemini" in reason
+
+    def test_gemini_client_error(self) -> None:
+        from google.genai import errors as genai_errors
+
+        exc = genai_errors.ClientError.__new__(genai_errors.ClientError)
+        Exception.__init__(exc, "400 invalid")
+        suffix, reason = classify_llm_error(exc)
+        assert suffix == "client_error"
+        assert "Gemini" in reason
+
+    def test_unknown_exception_falls_through(self) -> None:
+        exc = RuntimeError("something else")
+        suffix, reason = classify_llm_error(exc)
+        assert suffix == "call_failed"
+        assert "RuntimeError" in reason
 
 
 class TestParseRouterIntent:
