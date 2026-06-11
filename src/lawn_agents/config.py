@@ -205,6 +205,21 @@ class Settings(BaseSettings):
             FileNotFoundError: If `config_path` does not exist.
             pydantic.ValidationError: If either source fails validation.
         """
+        # Export `.env` to `os.environ` so libraries that read process
+        # env vars directly (e.g., huggingface_hub via HF_TOKEN) pick up
+        # the values. pydantic-settings reads `.env` separately into our
+        # typed fields below; this is complementary, not redundant.
+        #
+        # We pass an explicit CWD-relative path because `load_dotenv()`
+        # with no args calls `find_dotenv()`, which walks up from the
+        # *calling file's directory* — so it finds the project `.env`
+        # even when CWD is a test tmp path. With an explicit relative
+        # path the CWD is respected, matching pydantic-settings'
+        # behavior.
+        from dotenv import load_dotenv
+
+        load_dotenv(dotenv_path=Path(".env"))
+
         if not config_path.exists():
             msg = f"config file not found: {config_path}"
             raise FileNotFoundError(msg)

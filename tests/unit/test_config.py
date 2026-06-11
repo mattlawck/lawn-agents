@@ -57,3 +57,27 @@ class TestSettingsLoader:
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
         with pytest.raises(ValueError, match="GEMINI_API_KEY"):
             Settings.load(config_yaml_path)
+
+    def test_load_exports_env_file_to_os_environ(
+        self,
+        config_yaml_path: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """`.env` values are exported to `os.environ` so libraries like
+        huggingface_hub that read process env vars pick them up. Without
+        this, putting HF_TOKEN in `.env` would only populate the Settings
+        instance — huggingface_hub's `_warn_on_warning_headers` would still
+        fire the unauthenticated-request warning.
+        """
+        import os
+
+        # Write a fake .env with HF_TOKEN into the test cwd. The autouse
+        # `_isolate_env` fixture chdir'd here, so load_dotenv will find it.
+        env_file = Path.cwd() / ".env"
+        env_file.write_text("HF_TOKEN=hf_fake_token_for_test_only\n")
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+
+        Settings.load(config_yaml_path)
+
+        assert os.environ.get("HF_TOKEN") == "hf_fake_token_for_test_only"

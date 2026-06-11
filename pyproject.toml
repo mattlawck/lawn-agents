@@ -36,6 +36,11 @@ dependencies = [
     "anthropic>=0.40.0",
     "pydantic[email]>=2.9",
     "pydantic-settings>=2.6",
+    # pydantic-settings reads `.env` into typed fields; this explicit dep
+    # is used to also export those vars to `os.environ` so libraries like
+    # huggingface_hub (HF_TOKEN) pick them up. Pulled in transitively via
+    # pydantic-settings already; declared here to make the dep explicit.
+    "python-dotenv>=1.0",
     "httpx>=0.28",
     "tenacity>=9.0",
     "pyyaml>=6.0",
