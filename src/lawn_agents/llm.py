@@ -7,6 +7,7 @@ providers is a config-file change. See ADR 0006.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 from typing import TYPE_CHECKING, Literal, Protocol
@@ -401,8 +402,11 @@ def classify_llm_error(exc: BaseException) -> tuple[str, str]:
     https://platform.claude.com/docs/en/api/errors#sdk-error-types
     """
     # Anthropic: import lazily so we don't force a dep load when the
-    # configured provider is Gemini.
-    try:
+    # configured provider is Gemini. `contextlib.suppress(ImportError)`
+    # is the idiomatic "this branch is optional if the SDK isn't
+    # installed" pattern — also satisfies CodeQL's `py/empty-except`
+    # check, which can't tell that the `pass` was intentional.
+    with contextlib.suppress(ImportError):
         import anthropic
 
         if isinstance(exc, anthropic.AuthenticationError):
@@ -426,11 +430,9 @@ def classify_llm_error(exc: BaseException) -> tuple[str, str]:
             )
         if isinstance(exc, anthropic.BadRequestError):
             return ("bad_request", f"Anthropic rejected the request: {exc}")
-    except ImportError:
-        pass
 
     # Gemini / google-genai.
-    try:
+    with contextlib.suppress(ImportError):
         from google.genai import errors as genai_errors
 
         if isinstance(exc, genai_errors.ServerError):
@@ -440,8 +442,6 @@ def classify_llm_error(exc: BaseException) -> tuple[str, str]:
             )
         if isinstance(exc, genai_errors.ClientError):
             return ("client_error", f"Gemini rejected the request: {exc}")
-    except ImportError:
-        pass
 
     # Fallback — unknown exception. Caller still gets a structured event
     # and a meaningful (if generic) refusal reason.
