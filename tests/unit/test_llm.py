@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -244,6 +245,135 @@ class _FakeAnthropicResponse:
         self.usage = _FakeAnthropicUsage()
         self.content: list[Any] = []
         self._request_id = "req_test_123"
+
+
+class _FakeCacheRecord:
+    def __init__(self, name: str, display_name: str) -> None:
+        self.name = name
+        self.display_name = display_name
+
+
+class _FakeGenAICaches:
+    def __init__(self) -> None:
+        self.records: list[_FakeCacheRecord] = []
+        self.create_calls: list[dict[str, Any]] = []
+        self.list_should_fail = False
+        self.create_should_fail = False
+
+    def list(self) -> list[_FakeCacheRecord]:
+        if self.list_should_fail:
+            raise RuntimeError("simulated list failure")
+        return list(self.records)
+
+    def create(self, **kwargs: Any) -> _FakeCacheRecord:
+        self.create_calls.append(kwargs)
+        if self.create_should_fail:
+            raise RuntimeError("simulated create failure (e.g. below token threshold)")
+        config = kwargs["config"]
+        display_name = getattr(config, "display_name", "anon")
+        name = f"caches/{display_name}-name"
+        record = _FakeCacheRecord(name=name, display_name=display_name)
+        self.records.append(record)
+        return record
+
+
+class _FakeGenAIClientWithCaches:
+    def __init__(self, text: str) -> None:
+        self.models = _FakeGenAIModels(text)
+        self.caches = _FakeGenAICaches()
+
+
+class TestGeminiCaching:
+    """Explicit context caching for the Gemini system instruction.
+
+    The `_get_or_create_system_cache` helper provides three reuse tiers:
+    in-process dict hit, server-side `caches.list()` discovery, and
+    finally `caches.create()`. All failures fall through to passing
+    `system_instruction` directly — caching is opportunistic, never
+    blocking.
+    """
+
+    def _build_adapter(
+        self, *, response_text: str = '{"headline": "ok", "score": 1}'
+    ) -> tuple[GeminiChat, _FakeGenAIClientWithCaches]:
+        adapter = GeminiChat(api_key="test-dummy", model="gemini-2.5-flash")
+        fake_client = _FakeGenAIClientWithCaches(response_text)
+        adapter._client = fake_client  # type: ignore[assignment]
+        return adapter, fake_client
+
+    def test_first_call_creates_cache(self) -> None:
+        adapter, fake = self._build_adapter()
+        adapter.complete_structured(system="LONG_SYS", user="q", response_model=_ToyResponse)
+        assert len(fake.caches.create_calls) == 1
+        # The request uses the cache instead of system_instruction.
+        assert fake.models.last_kwargs is not None
+        config = fake.models.last_kwargs["config"]
+        assert getattr(config, "cached_content", None) is not None
+        assert getattr(config, "system_instruction", None) is None
+
+    def test_second_call_same_system_reuses_in_process_cache(self) -> None:
+        adapter, fake = self._build_adapter()
+        adapter.complete_structured(system="LONG_SYS", user="q1", response_model=_ToyResponse)
+        adapter.complete_structured(system="LONG_SYS", user="q2", response_model=_ToyResponse)
+        # Only one create call; the second go-round hits the in-process dict.
+        assert len(fake.caches.create_calls) == 1
+
+    def test_different_system_creates_different_cache(self) -> None:
+        adapter, fake = self._build_adapter()
+        adapter.complete_structured(system="SYS_A", user="q", response_model=_ToyResponse)
+        adapter.complete_structured(system="SYS_B", user="q", response_model=_ToyResponse)
+        assert len(fake.caches.create_calls) == 2
+        # Display names should differ (hash differs).
+        names = [call["config"].display_name for call in fake.caches.create_calls]
+        assert names[0] != names[1]
+
+    def test_cross_process_reuse_via_list(self) -> None:
+        """A fresh adapter finds an existing server-side cache via list().
+
+        Uses `complete_text` because `complete_structured` hashes the
+        schema-augmented system text, which would need test-side
+        replication of the SDK's schema-injection logic to seed.
+        """
+        adapter, fake = self._build_adapter(response_text="ad-hoc")
+        digest = hashlib.sha256(b"PRESEEDED_SYS").hexdigest()[:16]
+        existing = _FakeCacheRecord(
+            name=f"caches/preseeded-{digest}",
+            display_name=f"lawn-agents-{digest}",
+        )
+        fake.caches.records.append(existing)
+
+        adapter.complete_text(system="PRESEEDED_SYS", user="q")
+
+        # Found by list — no create call.
+        assert fake.caches.create_calls == []
+        config = fake.models.last_kwargs["config"]  # type: ignore[index]
+        assert config.cached_content == existing.name
+
+    def test_create_failure_falls_back_to_system_instruction(self) -> None:
+        adapter, fake = self._build_adapter()
+        fake.caches.create_should_fail = True
+        adapter.complete_structured(system="SHORT_SYS", user="q", response_model=_ToyResponse)
+        config = fake.models.last_kwargs["config"]  # type: ignore[index]
+        assert getattr(config, "cached_content", None) is None
+        assert config.system_instruction is not None
+        assert "SHORT_SYS" in config.system_instruction
+
+    def test_list_failure_does_not_block_create(self) -> None:
+        adapter, fake = self._build_adapter()
+        fake.caches.list_should_fail = True
+        adapter.complete_structured(system="LONG_SYS", user="q", response_model=_ToyResponse)
+        # List blew up but we still created (and used) a cache.
+        assert len(fake.caches.create_calls) == 1
+        config = fake.models.last_kwargs["config"]  # type: ignore[index]
+        assert config.cached_content is not None
+
+    def test_complete_text_uses_cache_when_available(self) -> None:
+        adapter, fake = self._build_adapter(response_text="ad-hoc")
+        out = adapter.complete_text(system="ROUTER_SYS_LONG_ENOUGH", user="q")
+        assert out == "ad-hoc"
+        assert len(fake.caches.create_calls) == 1
+        config = fake.models.last_kwargs["config"]  # type: ignore[index]
+        assert config.cached_content is not None
 
 
 class _FakeAnthropicTextBlock:
