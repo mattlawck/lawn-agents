@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import ValidationError
 
 from lawn_agents.agents import drought, knowledge, soiltemp, weather
-from lawn_agents.llm import build_chat_model
+from lawn_agents.llm import build_chat_model, classify_llm_error
 from lawn_agents.logging import get_logger
 from lawn_agents.models import Recommendation
 from lawn_agents.orchestrator import (
@@ -219,8 +219,13 @@ def _synthesize_plan_with_guardrail(
     except ValidationError as exc:
         log.info("planner.synthesizer_validation_failed", error=str(exc))
     except Exception as exc:
-        log.warning("planner.synthesizer_call_failed", error=str(exc))
-        return _refusal(f"planner synthesis call failed: {type(exc).__name__}: {exc}")
+        event_suffix, reason = classify_llm_error(exc)
+        log.warning(
+            f"planner.synthesizer_{event_suffix}",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return _refusal(reason)
 
     retry_user = (
         f"{user_prompt}\n\n---\n\n"
@@ -234,14 +239,21 @@ def _synthesize_plan_with_guardrail(
         return synthesizer.complete_structured(
             system=system, user=retry_user, response_model=Recommendation
         )
-    except Exception as exc:
-        # `ValidationError` is a subclass of `Exception` — see the
-        # matching note in orchestrator._synthesize_with_guardrail.
-        log.warning("planner.synthesizer_final_failure", error=str(exc))
+    except ValidationError as exc:
+        log.warning("planner.synthesizer_final_validation_failure", error=str(exc))
         return _refusal(
             "planner output failed schema validation twice; refusing rather than "
             "fabricating a recommendation"
         )
+    except Exception as exc:
+        # See matching note in orchestrator._synthesize_with_guardrail.
+        event_suffix, reason = classify_llm_error(exc)
+        log.warning(
+            f"planner.synthesizer_retry_{event_suffix}",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return _refusal(reason)
 
 
 def _planner_user_prompt(

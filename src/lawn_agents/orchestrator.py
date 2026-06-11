@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import ValidationError
 
 from lawn_agents.agents import drought, knowledge, research, soiltemp, weather
-from lawn_agents.llm import build_chat_model, parse_router_intent
+from lawn_agents.llm import build_chat_model, classify_llm_error, parse_router_intent
 from lawn_agents.logging import get_logger
 from lawn_agents.models import (
     ChemicalBrand,
@@ -350,8 +350,13 @@ def _synthesize_with_guardrail(
     except ValidationError as exc:
         log.info("orchestrator.synthesizer_validation_failed", error=str(exc))
     except Exception as exc:
-        log.warning("orchestrator.synthesizer_call_failed", error=str(exc))
-        return _refusal(f"synthesizer call failed: {type(exc).__name__}: {exc}")
+        event_suffix, reason = classify_llm_error(exc)
+        log.warning(
+            f"orchestrator.synthesizer_{event_suffix}",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return _refusal(reason)
 
     # One re-prompt with the error inline so the model can self-correct.
     retry_user = (
@@ -366,15 +371,24 @@ def _synthesize_with_guardrail(
         return synthesizer.complete_structured(
             system=system, user=retry_user, response_model=Recommendation
         )
-    except Exception as exc:
-        # `ValidationError` is a subclass of `Exception` — catching it
-        # alongside the parent here is redundant, so we just catch
-        # `Exception` and treat any failure as terminal for the guardrail.
-        log.warning("orchestrator.synthesizer_final_failure", error=str(exc))
+    except ValidationError as exc:
+        log.warning("orchestrator.synthesizer_final_validation_failure", error=str(exc))
         return _refusal(
             "synthesizer output failed schema validation twice; refusing "
             "rather than fabricating a recommendation"
         )
+    except Exception as exc:
+        # Reached retry from a validation failure but the retry itself
+        # hit an SDK-level error (auth, rate-limit, server). Classify
+        # so structlog + user message reflect the *actual* terminal
+        # failure mode, not "validation twice."
+        event_suffix, reason = classify_llm_error(exc)
+        log.warning(
+            f"orchestrator.synthesizer_retry_{event_suffix}",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return _refusal(reason)
 
 
 def _synthesizer_user_prompt(

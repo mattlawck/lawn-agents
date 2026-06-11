@@ -312,7 +312,10 @@ class TestAnswerRefusalPaths:
             ),
         )
         assert result.refused is True
-        assert "synthesizer call failed" in (result.refusal_reason or "").lower()
+        # Refusal reason now comes from `classify_llm_error`. For an
+        # unknown exception type (RuntimeError) the fallback message
+        # includes the exception class name.
+        assert "RuntimeError" in (result.refusal_reason or "")
 
 
 class TestAnswerDegradesOnFetchFailures:

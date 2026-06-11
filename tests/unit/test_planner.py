@@ -209,7 +209,10 @@ class TestRefusalPaths:
         synth = FakeChatModel(structured_responses=[RuntimeError("upstream API 500")])
         result = planner.plan_month(2026, 7, settings, **_injectables(synthesizer=synth))
         assert result.refused is True
-        assert "planner synthesis call failed" in (result.refusal_reason or "").lower()
+        # Refusal reason now comes from `classify_llm_error`. For an
+        # unknown exception type (RuntimeError) the fallback includes
+        # the exception class name.
+        assert "RuntimeError" in (result.refusal_reason or "")
 
 
 # --- brand bridge ---------------------------------------------------------
