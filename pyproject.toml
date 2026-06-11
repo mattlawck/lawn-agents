@@ -47,7 +47,13 @@ dependencies = [
     "structlog>=24.4",
     "rich>=13.9",
     "lancedb>=0.16",
-    "sentence-transformers>=3.3",
+    # `fastembed` runs BGE-small-en-v1.5 on ONNX runtime instead of
+    # torch. Same 384-dim model; smaller install (~67 MB vs ~150 MB+
+    # for torch+sentence-transformers), faster cold start, and removes
+    # our exposure to torch.jit.script CVEs we don't use anyway.
+    # See PR/migration notes for the score-equivalence check that
+    # confirmed we don't need to re-ingest the existing LanceDB index.
+    "fastembed>=0.8",
     "pypdf>=5.1",
     "trafilatura>=2.0",
     "ddgs>=9.0",
