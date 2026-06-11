@@ -88,10 +88,13 @@ class Embeddings(Protocol):
 
 
 class BgeSmall:
-    """`Embeddings` impl backed by `sentence-transformers` BAAI/bge-small-en-v1.5.
+    """`Embeddings` impl backed by `fastembed` BAAI/bge-small-en-v1.5.
 
-    The 700MB+ torch dependency loads lazily on first embed call so
-    imports stay cheap for CLI startup and for tests that inject a fake.
+    Uses the ONNX runtime instead of torch. Same 384-dim BGE-small
+    embedding model; smaller install (~67 MB ONNX vs ~150 MB+ torch),
+    faster cold start, no `torch.jit.script` exposure. Loads lazily on
+    first embed call so imports stay cheap for CLI startup and for
+    tests that inject a fake.
     """
 
     def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5") -> None:
@@ -106,24 +109,35 @@ class BgeSmall:
 
     def _ensure_model(self) -> Any:
         if self._model is None:
-            from sentence_transformers import SentenceTransformer
+            from fastembed import TextEmbedding
 
             log.info("knowledge.bge.loading_model", name=self._model_name)
-            self._model = SentenceTransformer(self._model_name)
+            # fastembed's BGE-small ONNX export bakes in L2 normalization
+            # and applies the search-query instruction internally for
+            # query_embed/passage_embed calls, matching sentence-
+            # transformers' bge defaults.
+            self._model = TextEmbedding(self._model_name)
         return self._model
 
     def embed_query(self, text: str) -> list[float]:
         """See `Embeddings.embed_query`."""
         model = self._ensure_model()
-        # bge-small recommends a search-query instruction prefix.
+        # Apply BGE's recommended search-query instruction prefix
+        # explicitly so vectors match what sentence-transformers
+        # produced for the existing LanceDB index (no re-ingest
+        # required). fastembed's `query_embed` is a no-op on bge-small
+        # in this version — same output as `embed` — so we control the
+        # instruction here.
         instructed = f"Represent this sentence for searching relevant passages: {text}"
-        vec = model.encode(instructed, normalize_embeddings=True)
-        return [float(x) for x in vec.tolist()]
+        vecs = list(model.embed([instructed]))
+        return [float(x) for x in vecs[0].tolist()]
 
     def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
         """See `Embeddings.embed_documents`."""
         model = self._ensure_model()
-        vecs = model.encode(list(texts), normalize_embeddings=True, batch_size=32)
+        # No instruction prefix on the corpus side — matches BGE
+        # convention and the prior sentence-transformers behavior.
+        vecs = list(model.embed(list(texts)))
         return [[float(x) for x in v.tolist()] for v in vecs]
 
 
