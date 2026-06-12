@@ -26,7 +26,7 @@ from lawn_agents.logging import get_logger
 from lawn_agents.models import Passage
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
     from datetime import datetime
 
     from lawn_agents.config import AppConfig
@@ -293,20 +293,163 @@ def retrieve(query: str, config: AppConfig, *, top_k: int | None = None) -> list
     return store.search(query_vec, k=k)
 
 
-def is_weak(passages: list[Passage], config: AppConfig) -> bool:
-    """Decide whether retrieval failed to find a strong-enough match.
+def is_weak(
+    passages: list[Passage],
+    config: AppConfig,
+    *,
+    query: str | None = None,
+    extra_terms: Sequence[str] = (),
+    relevance_gate: Callable[[str, Passage], bool] | None = None,
+) -> bool:
+    """Tiered relevance assessment of retrieval output.
+
+    Three confidence bands keyed off `retrieval.weak_score_threshold`
+    (default 0.55) and `retrieval.strong_score_threshold` (default 0.70):
+
+    - ``score >= strong``      → trust the top passage; skip checks.
+    - ``weak <= score < strong`` → run a lexical-overlap check between
+      the query (+ `extra_terms`, e.g. weed_bridge aliases) and the
+      top passage. On miss, optionally escalate to a `relevance_gate`
+      LLM check. Either failure marks the result weak.
+    - ``score < weak``         → mark weak (research subagent fires).
+
+    The tiered structure pays compute only for the ambiguous middle.
+    Most queries fall in the strong or weak bands and skip the checks
+    entirely. The Japanese-clover→sedge probe in PR #32 was at
+    score 0.696 — squarely medium — and would have been caught here
+    via lexical miss → gate.
 
     Args:
         passages: Output of `retrieve`.
-        config: Application configuration (used for `weak_score_threshold`).
+        config: Application configuration (used for thresholds).
+        query: User question text; required for lexical / gate checks.
+        extra_terms: Additional terms (e.g. weed aliases) to count as
+            query vocabulary for the lexical overlap check.
+        relevance_gate: Optional callable
+            ``(query, top_passage) -> is_relevant``. Invoked only when
+            lexical overlap fails in the medium band. Pass None to
+            skip gate escalation (treats lexical miss as weak).
 
     Returns:
-        True if the top score is below the configured threshold or the
-        list is empty.
+        True if the result is weak by any of the three signals.
     """
     if not passages:
         return True
-    return passages[0].score < config.knowledge.retrieval.weak_score_threshold
+
+    top = passages[0]
+    weak_threshold = config.knowledge.retrieval.weak_score_threshold
+    strong_threshold = config.knowledge.retrieval.strong_score_threshold
+
+    if top.score < weak_threshold:
+        return True
+    if top.score >= strong_threshold:
+        return False
+
+    # Medium band.
+    if query is None:
+        # Fall back to single-threshold behavior when caller didn't
+        # provide a query — keeps legacy callers (tests, etc.) working
+        # without forcing them to pass through query/aliases/gate.
+        return False
+
+    if _has_lexical_overlap(query, top, extra_terms):
+        return False
+
+    log.info(
+        "knowledge.is_weak.medium_lexical_miss",
+        score=top.score,
+        source=top.source_id,
+    )
+    if relevance_gate is None:
+        return True
+
+    try:
+        relevant = relevance_gate(query, top)
+    except Exception as exc:
+        # Gate failures shouldn't block the pipeline; conservatively
+        # treat as weak so the research subagent can run.
+        log.warning("knowledge.is_weak.gate_failed", error=str(exc))
+        return True
+    log.info("knowledge.is_weak.gate_verdict", relevant=relevant)
+    return not relevant
+
+
+_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "do",
+        "for",
+        "from",
+        "have",
+        "i",
+        "in",
+        "is",
+        "it",
+        "its",
+        "my",
+        "of",
+        "on",
+        "or",
+        "should",
+        "so",
+        "the",
+        "this",
+        "to",
+        "use",
+        "want",
+        "was",
+        "we",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "why",
+        "with",
+        "would",
+        "you",
+        "your",
+        "how",
+        "can",
+        "could",
+        "does",
+        "did",
+        "had",
+        "has",
+        "may",
+        "might",
+        "will",
+        "yard",
+        "lawn",
+        "if",
+    }
+)
+
+
+def _tokenize(text: str) -> set[str]:
+    """Tokenize free text into lowercase content words."""
+    import re
+
+    raw = re.findall(r"[A-Za-z][A-Za-z0-9'-]+", text.lower())
+    return {w for w in raw if len(w) > 2 and w not in _STOPWORDS}
+
+
+def _has_lexical_overlap(query: str, passage: Passage, extra_terms: Sequence[str] = ()) -> bool:
+    """At least one query (or alias) content word must appear in the passage."""
+    query_terms = _tokenize(query)
+    for term in extra_terms:
+        query_terms |= _tokenize(term)
+    if not query_terms:
+        return False
+    passage_terms = _tokenize(passage.content)
+    return bool(query_terms & passage_terms)
 
 
 # --- factory hooks (overridable in tests) ---------------------------------

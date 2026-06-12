@@ -145,6 +145,222 @@ class TestIsWeak:
         assert is_weak(passages, settings.app) is False
 
 
+class TestIsWeakTiered:
+    """Tiered relevance check (PR-tba): high / medium / low confidence bands.
+
+    `is_weak` now treats the BGE-small score as a *confidence band*. Top
+    scores at or above `strong_score_threshold` (default 0.70) skip
+    extra checks; scores between weak and strong run a lexical-overlap
+    check, optionally escalating to an LLM relevance gate. Scores below
+    `weak_score_threshold` (default 0.55) are weak as before.
+
+    Probed motivation in PR #32: the Japanese-clover query returned
+    sedge factsheets at score ~0.696 — squarely medium — and was
+    falsely marked strong by the old single-threshold check.
+    """
+
+    @pytest.fixture
+    def settings(self, config_yaml_path: Path) -> Settings:
+        return Settings.load(config_yaml_path)
+
+    def _passage(self, score: float, content: str = "generic content") -> Passage:
+        return Passage(
+            content=content,
+            score=score,
+            source_id="s",
+            source_title="S",
+        )
+
+    def test_strong_band_skips_checks(self, settings: Settings) -> None:
+        """Top score at the strong threshold short-circuits without lexical/gate."""
+        strong = settings.app.knowledge.retrieval.strong_score_threshold
+        gate_calls: list[tuple[str, Passage]] = []
+
+        def gate(q: str, p: Passage) -> bool:  # pragma: no cover - shouldn't fire
+            gate_calls.append((q, p))
+            return False
+
+        assert (
+            is_weak(
+                [self._passage(strong + 0.01, content="irrelevant filler")],
+                settings.app,
+                query="Japanese clover control",
+                extra_terms=["annual lespedeza"],
+                relevance_gate=gate,
+            )
+            is False
+        )
+        assert gate_calls == []
+
+    def test_medium_band_lexical_overlap_marks_strong(self, settings: Settings) -> None:
+        """Medium-band score + lexical overlap with the query → strong, no gate."""
+        weak = settings.app.knowledge.retrieval.weak_score_threshold
+        strong = settings.app.knowledge.retrieval.strong_score_threshold
+        mid_score = (weak + strong) / 2
+        gate_calls: list[tuple[str, Passage]] = []
+
+        def gate(q: str, p: Passage) -> bool:  # pragma: no cover - shouldn't fire
+            gate_calls.append((q, p))
+            return False
+
+        # Passage shares "clover" with the query → lexical overlap → strong.
+        passage = self._passage(mid_score, content="control of clover in lawns")
+        assert (
+            is_weak(
+                [passage],
+                settings.app,
+                query="how do I treat clover in my zoysia?",
+                relevance_gate=gate,
+            )
+            is False
+        )
+        assert gate_calls == []
+
+    def test_medium_band_lexical_miss_escalates_to_gate_relevant(self, settings: Settings) -> None:
+        """Lexical miss → escalate to gate; gate says relevant → strong."""
+        weak = settings.app.knowledge.retrieval.weak_score_threshold
+        strong = settings.app.knowledge.retrieval.strong_score_threshold
+        mid_score = (weak + strong) / 2
+        gate_calls: list[tuple[str, Passage]] = []
+
+        def gate(q: str, p: Passage) -> bool:
+            gate_calls.append((q, p))
+            return True
+
+        # No token overlap between question and content.
+        passage = self._passage(mid_score, content="unrelated turf maintenance prose")
+        assert (
+            is_weak(
+                [passage],
+                settings.app,
+                query="how do I treat clover?",
+                relevance_gate=gate,
+            )
+            is False
+        )
+        assert len(gate_calls) == 1
+
+    def test_medium_band_lexical_miss_gate_irrelevant_is_weak(self, settings: Settings) -> None:
+        """Lexical miss + gate disagrees → weak."""
+        weak = settings.app.knowledge.retrieval.weak_score_threshold
+        strong = settings.app.knowledge.retrieval.strong_score_threshold
+        mid_score = (weak + strong) / 2
+
+        def gate(q: str, p: Passage) -> bool:
+            return False
+
+        passage = self._passage(mid_score, content="totally unrelated content")
+        assert (
+            is_weak(
+                [passage],
+                settings.app,
+                query="treat dollarweed",
+                relevance_gate=gate,
+            )
+            is True
+        )
+
+    def test_japanese_clover_canonical_failure_now_caught(self, settings: Settings) -> None:
+        """Regression test for the exact PR #32 false-positive case.
+
+        Query: "I have Japanese clover in the yard, what should I use?"
+        Top hit (pre-fix): sedge factsheet at score 0.696.
+        Sedge content shares no tokens with "japanese clover" or the
+        weed-bridge aliases (annual lespedeza / Lespedeza striata /
+        Kummerowia striata). Lexical miss → escalates to gate. With a
+        gate that declines, this is now `weak` and the research
+        subagent fires.
+        """
+
+        def gate(q: str, p: Passage) -> bool:
+            return False
+
+        passage = self._passage(
+            0.696,
+            content=(
+                "Sedges have edges. Yellow nutsedge can be controlled with "
+                "halosulfuron-methyl applied in the early summer..."
+            ),
+        )
+        assert (
+            is_weak(
+                [passage],
+                settings.app,
+                query="I have Japanese clover in the yard, what should I use?",
+                extra_terms=[
+                    "Annual lespedeza",
+                    "Lespedeza striata",
+                    "Kummerowia striata",
+                ],
+                relevance_gate=gate,
+            )
+            is True
+        )
+
+    def test_low_band_is_weak_regardless(self, settings: Settings) -> None:
+        weak = settings.app.knowledge.retrieval.weak_score_threshold
+
+        def gate(q: str, p: Passage) -> bool:  # pragma: no cover - shouldn't fire
+            return True
+
+        passage = self._passage(weak - 0.05, content="clover")
+        assert (
+            is_weak(
+                [passage],
+                settings.app,
+                query="clover",
+                relevance_gate=gate,
+            )
+            is True
+        )
+
+    def test_gate_exception_treated_as_weak(self, settings: Settings) -> None:
+        """A failing gate must not crash the pipeline; conservatively mark weak."""
+        weak = settings.app.knowledge.retrieval.weak_score_threshold
+        strong = settings.app.knowledge.retrieval.strong_score_threshold
+        mid_score = (weak + strong) / 2
+
+        def gate(q: str, p: Passage) -> bool:
+            raise RuntimeError("router model down")
+
+        passage = self._passage(mid_score, content="unrelated content")
+        assert (
+            is_weak(
+                [passage],
+                settings.app,
+                query="japanese clover",
+                relevance_gate=gate,
+            )
+            is True
+        )
+
+    def test_no_gate_provided_treats_lexical_miss_as_weak(self, settings: Settings) -> None:
+        """Without a gate, lexical miss → weak (no escalation path)."""
+        weak = settings.app.knowledge.retrieval.weak_score_threshold
+        strong = settings.app.knowledge.retrieval.strong_score_threshold
+        mid_score = (weak + strong) / 2
+
+        passage = self._passage(mid_score, content="unrelated content")
+        assert (
+            is_weak(
+                [passage],
+                settings.app,
+                query="japanese clover",
+            )
+            is True
+        )
+
+    def test_missing_query_falls_back_to_single_threshold(self, settings: Settings) -> None:
+        """Legacy callers without query argument get the old behavior."""
+        weak = settings.app.knowledge.retrieval.weak_score_threshold
+        strong = settings.app.knowledge.retrieval.strong_score_threshold
+        mid_score = (weak + strong) / 2
+
+        # No query passed → fall through medium band as "not weak"
+        # (legacy behavior preserved for tests that haven't migrated).
+        assert is_weak([self._passage(mid_score, content="x")], settings.app) is False
+
+
 class TestLanceDBStore:
     """LanceDBStore round-trips chunks through an actual file-backed index."""
 

@@ -137,7 +137,18 @@ def answer(
     weed_matches = detect_weeds_in_question(question, settings.weeds)
     passages = _retrieve_with_weed_aliases(question, weed_matches, settings.app, rfn)
 
-    if settings.app.research.enabled and knowledge.is_weak(passages, settings.app):
+    # Tiered relevance check: lexical-overlap miss in the medium band
+    # escalates to a cheap LLM gate via the router model.
+    alias_terms: list[str] = []
+    for weed in weed_matches.values():
+        alias_terms.extend(weed.aliases)
+    if settings.app.research.enabled and knowledge.is_weak(
+        passages,
+        settings.app,
+        query=question,
+        extra_terms=alias_terms,
+        relevance_gate=_make_relevance_gate(router_chat),
+    ):
         log.info("orchestrator.retrieval_weak.invoking_research")
         researched = _safe_research(
             expand_query_with_weed_aliases(question, weed_matches),
@@ -301,6 +312,36 @@ def _retrieve_with_weed_aliases(
     ranked_keys = sorted(fused_scores.keys(), key=lambda k: fused_scores[k], reverse=True)
     top_k = config.knowledge.retrieval.rerank_top_k
     return [passage_by_key[k] for k in ranked_keys[:top_k]]
+
+
+_RELEVANCE_GATE_SYSTEM = (
+    "You are a relevance gate. Given a USER QUESTION and a RETRIEVED PASSAGE, "
+    "output exactly one word: 'yes' if the passage contains information that "
+    "directly helps answer the question, or 'no' otherwise. No explanation, "
+    "no punctuation, just the single word."
+)
+
+
+def _make_relevance_gate(
+    chat_model: ChatModel,
+) -> Callable[[str, Passage], bool]:
+    """Build a `(query, passage) -> bool` callable for `is_weak`.
+
+    Runs the cheap router model with a single-word yes/no prompt. Used
+    only when retrieval lands in the medium-confidence band AND the
+    lexical-overlap check fails, so the cost is amortized across the
+    rare ambiguous case rather than every query.
+    """
+
+    def gate(query: str, passage: Passage) -> bool:
+        # Cap the passage content so the gate prompt stays cheap.
+        snippet = passage.content[:800]
+        user = f"USER QUESTION:\n{query}\n\nRETRIEVED PASSAGE:\n{snippet}\n\nAnswer (yes/no):"
+        raw = chat_model.complete_text(system=_RELEVANCE_GATE_SYSTEM, user=user)
+        token = raw.strip().lower().strip(".'\"`")
+        return token.startswith("y")
+
+    return gate
 
 
 def _safe_research(
