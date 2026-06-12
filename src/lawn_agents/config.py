@@ -72,7 +72,15 @@ class RetrievalConfig(BaseModel):
     top_k_vector: int = 8
     top_k_bm25: int = 4
     rerank_top_k: int = 5
+    # Tiered relevance check (PR-tba):
+    #   score < weak    → weak (research subagent fires)
+    #   score >= strong → strong (skip extra checks)
+    #   between         → run lexical-overlap check; on miss, escalate
+    #                     to an LLM relevance gate via the cheap router
+    #                     model. Catches semantic mismatches like the
+    #                     Japanese-clover→sedge probe in PR #32.
     weak_score_threshold: float = 0.55
+    strong_score_threshold: float = 0.70
 
 
 class KnowledgeConfig(BaseModel):
