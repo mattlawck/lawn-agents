@@ -110,6 +110,32 @@ class TestSeededChemicalsFile:
         assert brand.notes is not None
         assert "16-0-10" in brand.notes
 
+    def test_sedge_ender_is_sulfentrazone(self, chemicals: ChemicalsConfig) -> None:
+        """Bonide Sedge Ender — PPO inhibitor; different chemistry from Sedgehammer.
+
+        Notes capture the complementary nature with halosulfuron-methyl so
+        the synthesizer can reason about sequential / paired applications.
+        """
+        brand = chemicals.brands["Sedge Ender"]
+        assert brand.active_ingredients == ["sulfentrazone"]
+        assert brand.category.value == "herbicide"
+        assert brand.notes is not None
+        assert "PPO" in brand.notes
+        # Cross-reference to halosulfuron-methyl chemistry; the synthesizer
+        # uses this to reason about complementary tank-mix / sequential apps.
+        assert "halosulfuron-methyl" in brand.notes
+
+    def test_sedgehammer_notes_cross_reference_sedge_ender(
+        self, chemicals: ChemicalsConfig
+    ) -> None:
+        """Sedgehammer entry calls out the paired-use strategy with sulfentrazone."""
+        brand = chemicals.brands["Sedgehammer"]
+        assert brand.notes is not None
+        assert "sulfentrazone" in brand.notes
+        # Mention of the translocation behavior — the load-bearing detail
+        # for why the two chemistries are complementary.
+        assert "translocat" in brand.notes.lower()
+
 
 class TestSettingsLoadsChemicals:
     """`Settings.load` reads `data/chemicals.yaml` when present."""

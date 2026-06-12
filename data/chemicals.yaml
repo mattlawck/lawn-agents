@@ -56,7 +56,12 @@ brands:
   "Sedgehammer":
     active_ingredients: ["halosulfuron-methyl"]
     category: herbicide
-    notes: "Gowan; selective post-emergent for yellow + purple nutsedge and kyllinga."
+    notes: "Gowan; selective post-emergent for yellow + purple nutsedge and green kyllinga. Translocated (systemic) — moves to nutlets/tubers and kills the underground reproductive structures. Slower visible effect (2-3 weeks) but durable kill. Apply on actively growing sedges; surfactant required (Sedgehammer+ ships with surfactant included, plain Sedgehammer requires non-ionic surfactant added separately). Safe on Zoysia, Bermuda, St. Augustine, Centipede. Often paired with sulfentrazone (Sedge Ender) sequentially: sulfentrazone for fast above-ground knockdown, halosulfuron-methyl for nutlet kill via translocation. Use different modes of action for resistance management (halosulfuron is ALS / Group 2; sulfentrazone is PPO / Group 14)."
+
+  "Sedge Ender":
+    active_ingredients: ["sulfentrazone"]
+    category: herbicide
+    notes: "Bonide consumer brand; PPO-inhibitor post-emergent (Group 14 — different mode of action from Sedgehammer's ALS-inhibitor halosulfuron-methyl). Contact / above-ground burndown action: fast visible damage (days), full kill 2-3 weeks. Controls nutsedge plus a broader set of broadleaf weeds (dollarweed, spurge, oxalis). Common residential SKU. Often paired with halosulfuron-methyl (Sedgehammer) sequentially for tough nutsedge infestations — sulfentrazone burns the foliage quickly while halosulfuron translocates to kill nutlets. Apply on actively growing sedge to dry foliage during warm weather. Safe on most warm-season turf including Zoysia at labeled rates."
 
   # --- Pre-emergent herbicides ---
   "Prodiamine":
