@@ -54,7 +54,7 @@ dependencies = [
     # See PR/migration notes for the score-equivalence check that
     # confirmed we don't need to re-ingest the existing LanceDB index.
     "fastembed>=0.8",
-    "pypdf>=5.1",
+    "pypdf>=6.13.3",
     "trafilatura>=2.0",
     "ddgs>=9.0",
 ]
