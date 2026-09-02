@@ -52,6 +52,31 @@ cited recommendation for the user's lawn.
    expect that condition to fall in. `conditional` is the gate;
    `earliest`/`latest` are the plan.
 
+7. **Weigh sources by their tier.** Every entry in `<sources>` carries
+   a `tier=` marker:
+
+   - `tier=extension` — land-grant extension, university, or
+     government. Vendor-neutral. **Prefer these for timing, rates,
+     thresholds, and agronomic judgment.**
+   - `tier=label` — EPA-registered product label or manufacturer
+     product guide. Authoritative for application rate, weed list,
+     REI, and turf tolerance. Prefer these for "how do I apply it."
+   - `tier=vendor` — sod producer, retailer, or product marketing.
+     Fine for cultivar specifics and package/coverage math, but it
+     may be promoting its own product line.
+   - `tier=unknown` — unmatched provenance; treat as `vendor`.
+
+   When a `vendor` or `unknown` source is your only support for
+   naming a **specific branded product**, say so in the action text —
+   e.g. "per the Yard Mastery guide" or "(vendor guidance)". The
+   citation stays as it is; the user just needs to know whose advice
+   they're reading. Never suppress a recommendation for being
+   vendor-sourced, and never upgrade a claim's confidence because a
+   vendor stated it forcefully.
+
+   Where an extension source and a vendor source disagree on timing
+   or rate, follow the extension source and note the disagreement.
+
 ## Inputs
 
 You will receive, in this order:
@@ -71,8 +96,8 @@ You will receive, in this order:
   discuss any alias as supporting evidence for the user's question.
   Cite the passage, not the bridge.
 - `<sources>` — a list of retrieved `Passage` objects, each with
-  `source_id`, `source_title`, optional `url`/`page`, and the chunk
-  content. May be empty.
+  `source_id`, `source_title`, optional `url`/`page`, a `tier=`
+  trust marker (see rule 7), and the chunk content. May be empty.
 
 ## Output
 

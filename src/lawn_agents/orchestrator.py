@@ -41,7 +41,7 @@ from lawn_agents.models import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from lawn_agents.config import AppConfig, Settings
+    from lawn_agents.config import AppConfig, Settings, SourceTiersConfig
     from lawn_agents.llm import ChatModel
     from lawn_agents.models import DroughtSnapshot, Passage, SoilSnapshot, WeatherSnapshot
 
@@ -164,6 +164,7 @@ def answer(
         passages=passages,
         chemicals=settings.chemicals,
         weeds=settings.weeds,
+        tiers=settings.app.knowledge.source_tiers,
         weed_matches=weed_matches,
         brand_matches=brand_matches,
         synthesizer=synthesizer_chat,
@@ -402,6 +403,7 @@ def _synthesize_with_guardrail(
     passages: list[Passage],
     chemicals: ChemicalsConfig,
     weeds: WeedsConfig,
+    tiers: SourceTiersConfig,
     weed_matches: dict[str, WeedAlias] | None = None,
     brand_matches: dict[str, ChemicalBrand] | None = None,
     synthesizer: ChatModel,
@@ -421,7 +423,7 @@ def _synthesize_with_guardrail(
     )
     weed_bridge = _weed_bridge_text(weed_matches)
     user_prompt = _synthesizer_user_prompt(
-        question, intent, conditions, passages, brand_bridge, weed_bridge
+        question, intent, conditions, passages, tiers, brand_bridge, weed_bridge
     )
 
     try:
@@ -477,6 +479,7 @@ def _synthesizer_user_prompt(
     intent: Intent,
     conditions: Conditions,
     passages: list[Passage],
+    tiers: SourceTiersConfig,
     brand_bridge: str = "",
     weed_bridge: str = "",
 ) -> str:
@@ -486,7 +489,7 @@ def _synthesizer_user_prompt(
         f"<intent>{intent}</intent>\n\n"
         f"<conditions>\n{conditions.model_dump_json(indent=2)}\n</conditions>\n\n"
         f"<question>{question}</question>{bridge_block}\n\n"
-        f"<sources>\n{_format_sources(passages)}\n</sources>"
+        f"<sources>\n{knowledge.format_sources(passages, tiers)}\n</sources>"
     )
 
 
@@ -589,22 +592,6 @@ def _weed_bridge_text(matched: dict[str, WeedAlias]) -> str:
         lines.append(line)
     lines.append("</weed_bridge>")
     return "\n".join(lines)
-
-
-def _format_sources(passages: list[Passage]) -> str:
-    if not passages:
-        return "(no relevant passages retrieved)"
-    parts: list[str] = []
-    for i, p in enumerate(passages, start=1):
-        review_flag = " [unreviewed]" if p.requires_review else ""
-        page_str = f", page {p.page}" if p.page is not None else ""
-        url_str = f", url {p.url}" if p.url else ""
-        parts.append(
-            f"[{i}] source_id={p.source_id!r} title={p.source_title!r}"
-            f"{page_str}{url_str}{review_flag} score={p.score:.3f}\n"
-            f"    {p.content}"
-        )
-    return "\n\n".join(parts)
 
 
 def _refusal(reason: str) -> Recommendation:

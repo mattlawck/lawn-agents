@@ -23,13 +23,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from lawn_agents.logging import get_logger
-from lawn_agents.models import Passage
+from lawn_agents.models import Passage, SourceTier
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from datetime import datetime
 
-    from lawn_agents.config import AppConfig
+    from lawn_agents.config import AppConfig, SourceTiersConfig
 
 log = get_logger(__name__)
 
@@ -376,6 +376,58 @@ def is_weak(
         return True
     log.info("knowledge.is_weak.gate_verdict", relevant=relevant)
     return not relevant
+
+
+def classify_source(passage: Passage, tiers: SourceTiersConfig) -> SourceTier:
+    """Classify a passage's provenance into a `SourceTier` (ADR 0009).
+
+    Matches configured substrings against the passage's URL,
+    `source_id`, and `source_title` combined, so both web sources and
+    local corpus PDFs (which have no URL) can be tiered.
+
+    Precedence is `label` → `extension` → `vendor`: trust travels with
+    the document, not the host. A manufacturer label mirrored on a
+    retailer's domain is still a label, and matching the label patterns
+    first is what keeps it one.
+    """
+    haystack = " ".join(
+        part for part in (passage.url, passage.source_id, passage.source_title) if part
+    ).lower()
+    for tier, patterns in (
+        (SourceTier.LABEL, tiers.label),
+        (SourceTier.EXTENSION, tiers.extension),
+        (SourceTier.VENDOR, tiers.vendor),
+    ):
+        if any(pattern.lower() in haystack for pattern in patterns):
+            return tier
+    return SourceTier.UNKNOWN
+
+
+def format_sources(passages: list[Passage], tiers: SourceTiersConfig) -> str:
+    """Render retrieved passages as the `<sources>` block for a prompt.
+
+    Shared by the orchestrator and the planner — they had byte-identical
+    private copies before tiering gave them a reason to diverge, and one
+    of them would have been updated without the other.
+
+    Each entry carries a `tier=` marker so the synthesizer can weigh
+    extension guidance against vendor marketing instead of treating
+    every cited passage as equally authoritative.
+    """
+    if not passages:
+        return "(no relevant passages retrieved)"
+    parts: list[str] = []
+    for i, p in enumerate(passages, start=1):
+        review_flag = " [unreviewed]" if p.requires_review else ""
+        page_str = f", page {p.page}" if p.page is not None else ""
+        url_str = f", url {p.url}" if p.url else ""
+        tier = classify_source(p, tiers)
+        parts.append(
+            f"[{i}] source_id={p.source_id!r} title={p.source_title!r}"
+            f"{page_str}{url_str} tier={tier.value}{review_flag} score={p.score:.3f}\n"
+            f"    {p.content}"
+        )
+    return "\n\n".join(parts)
 
 
 _STOPWORDS = frozenset(

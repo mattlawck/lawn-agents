@@ -63,6 +63,64 @@ knowledge:
     # "weak result" and the orchestrator may invoke the research subagent.
     weak_score_threshold: 0.55
 
+  # Source trust tiers (ADR 0009). Every retrieved passage is tagged
+  # with a tier that the synthesizer sees in the <sources> block, so it
+  # can tell "Clemson says apply N at this soil temp" apart from "the
+  # guide selling this fertilizer says to buy this fertilizer." Both
+  # are legitimately citable; they are not equally authoritative.
+  #
+  # Each entry is a case-insensitive SUBSTRING matched against the
+  # passage's url + source_id + source_title. Substring matching (not
+  # host matching) is what lets a local corpus PDF with no URL be
+  # tiered by its title.
+  #
+  # Precedence is label -> extension -> vendor: trust travels with the
+  # document, not the host. A manufacturer label mirrored on a
+  # retailer's domain is still a label.
+  #
+  # Omit this whole section to accept the defaults below.
+  source_tiers:
+    # EPA labels + manufacturer product guides. Authoritative for
+    # rate, weed list, REI, turf tolerance.
+    label:
+      - cdms.net
+      - envu.com
+      - greenbook.net
+      - "-label"
+      - "_label"
+      - label.pdf
+      - product-guide
+    # Land-grant extension / university / government. Vendor-neutral;
+    # preferred for timing, thresholds, and agronomic judgment.
+    extension:
+      - hgic.clemson.edu
+      - clemson.edu
+      - extension.uga.edu
+      - turffiles.ncsu.edu
+      - content.ces.ncsu.edu
+      - ces.ncsu.edu
+      - edis.ifas.ufl.edu
+      - ifas.ufl.edu
+      - ".edu"
+      - "extension."
+      - usda.gov
+      - noaa.gov
+      - drought.gov
+      - weather.gov
+    # Sod producers, retailers, product marketing. Useful for cultivar
+    # specifics and package/coverage math; may be promoting its own line.
+    vendor:
+      - supersod.com
+      - sodsolutions.com
+      - theturfgrassgroup.com
+      - yardmastery.com
+      - domyown.com
+      - siteone.com
+      - scotts.com
+      # Add the titles of any vendor PDFs in data/corpus/ here so they
+      # tier correctly — they have no URL to match on. For example:
+      # - "Warm Season E-Guide"
+
 research:
   # Self-extending RAG. When knowledge.py returns weak results the
   # orchestrator may dispatch a research subagent constrained to this
