@@ -308,9 +308,10 @@ def is_weak(
 
     - ``score >= strong``      → trust the top passage; skip checks.
     - ``weak <= score < strong`` → run a lexical-overlap check between
-      the query (+ `extra_terms`, e.g. weed_bridge aliases) and the
-      top passage. On miss, optionally escalate to a `relevance_gate`
-      LLM check. Either failure marks the result weak.
+      the query (+ `extra_terms` — the weed aliases and brand active
+      ingredients the bridges would add) and the top passage. On miss,
+      optionally escalate to a `relevance_gate` LLM check. Either
+      failure marks the result weak.
     - ``score < weak``         → mark weak (research subagent fires).
 
     The tiered structure pays compute only for the ambiguous middle.
@@ -323,8 +324,11 @@ def is_weak(
         passages: Output of `retrieve`.
         config: Application configuration (used for thresholds).
         query: User question text; required for lexical / gate checks.
-        extra_terms: Additional terms (e.g. weed aliases) to count as
-            query vocabulary for the lexical overlap check.
+        extra_terms: Additional terms to count as query vocabulary for
+            the lexical overlap check — weed aliases (ADR 0008) and brand
+            active ingredients (ADR 0007). The corpus discusses chemistry
+            and scientific names; users ask by brand and common name, so
+            without these the check compares two disjoint vocabularies.
         relevance_gate: Optional callable
             ``(query, top_passage) -> is_relevant``. Invoked only when
             lexical overlap fails in the medium band. Pass None to

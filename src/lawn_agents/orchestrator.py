@@ -135,18 +135,17 @@ def answer(
 
     conditions = _fetch_conditions(settings.app, wfn, sfn, dfn)
     weed_matches = detect_weeds_in_question(question, settings.weeds)
+    brand_matches = detect_brands_in_question(question, settings.chemicals)
     passages = _retrieve_with_weed_aliases(question, weed_matches, settings.app, rfn)
 
     # Tiered relevance check: lexical-overlap miss in the medium band
-    # escalates to a cheap LLM gate via the router model.
-    alias_terms: list[str] = []
-    for weed in weed_matches.values():
-        alias_terms.extend(weed.aliases)
+    # escalates to a cheap LLM gate via the router model. Both bridges
+    # contribute vocabulary — see `_bridge_lexical_terms`.
     if settings.app.research.enabled and knowledge.is_weak(
         passages,
         settings.app,
         query=question,
-        extra_terms=alias_terms,
+        extra_terms=_bridge_lexical_terms(weed_matches, brand_matches),
         relevance_gate=_make_relevance_gate(router_chat),
     ):
         log.info("orchestrator.retrieval_weak.invoking_research")
@@ -166,6 +165,7 @@ def answer(
         chemicals=settings.chemicals,
         weeds=settings.weeds,
         weed_matches=weed_matches,
+        brand_matches=brand_matches,
         synthesizer=synthesizer_chat,
     )
 
@@ -314,6 +314,39 @@ def _retrieve_with_weed_aliases(
     return [passage_by_key[k] for k in ranked_keys[:top_k]]
 
 
+def _bridge_lexical_terms(
+    weed_matches: dict[str, WeedAlias],
+    brand_matches: dict[str, ChemicalBrand],
+) -> list[str]:
+    """Vocabulary the bridges add to the question, for `is_weak`'s lexical check.
+
+    Both bridges exist because the user's vocabulary and the corpus's
+    vocabulary differ: the user says "GrubX" or "Japanese clover", the
+    extension factsheet says "chlorantraniliprole" or "annual
+    lespedeza". The synthesizer gets told about both mappings via
+    `<brand_bridge>` / `<weed_bridge>`, but `knowledge.is_weak` runs
+    *before* synthesis and only sees the raw question.
+
+    Without this, the lexical-overlap check compares the user's words
+    against a passage that never uses them, misses, and escalates to
+    the LLM relevance gate — which is equally blind and returns "not
+    relevant." Observed live on 2026-09-02: "Is it too late to treat
+    with GrubX?" retrieved the Clemson white-grub factsheet at 0.644
+    (medium band), was marked weak, fired a pointless research call,
+    and then the synthesizer answered correctly from that very passage.
+
+    Feeding both bridges' terms in as `extra_terms` closes the gap. The
+    weed side was already wired (ADR 0008); the brand side (ADR 0007)
+    was not.
+    """
+    terms: list[str] = []
+    for weed in weed_matches.values():
+        terms.extend(weed.aliases)
+    for brand in brand_matches.values():
+        terms.extend(brand.active_ingredients)
+    return terms
+
+
 _RELEVANCE_GATE_SYSTEM = (
     "You are a relevance gate. Given a USER QUESTION and a RETRIEVED PASSAGE, "
     "output exactly one word: 'yes' if the passage contains information that "
@@ -370,12 +403,19 @@ def _synthesize_with_guardrail(
     chemicals: ChemicalsConfig,
     weeds: WeedsConfig,
     weed_matches: dict[str, WeedAlias] | None = None,
+    brand_matches: dict[str, ChemicalBrand] | None = None,
     synthesizer: ChatModel,
 ) -> Recommendation:
     system = _load_prompt("synthesizer.md")
-    brand_bridge = _brand_bridge_text(detect_brands_in_question(question, chemicals))
-    # Caller may have already detected weeds (for retrieval-query expansion);
-    # re-use that work to avoid a second regex scan.
+    # Caller may have already detected weeds/brands (for retrieval-query
+    # expansion and the relevance check); re-use that work to avoid a
+    # second regex scan.
+    brand_matches = (
+        brand_matches
+        if brand_matches is not None
+        else detect_brands_in_question(question, chemicals)
+    )
+    brand_bridge = _brand_bridge_text(brand_matches)
     weed_matches = (
         weed_matches if weed_matches is not None else detect_weeds_in_question(question, weeds)
     )
