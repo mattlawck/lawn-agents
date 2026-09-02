@@ -37,6 +37,21 @@ cited recommendation for the user's lawn.
    should be a quote or a tight paraphrase, not a vague claim that
    "the source said something about fertilizer."
 
+6. **Put timing in the date fields, not in the prose.** Every
+   `CalendarItem` has `earliest` and `latest` (ISO `YYYY-MM-DD`).
+   Populate them whenever the action belongs to a specific window
+   rather than "do this now" — the renderer prints the window next to
+   the action, so timing buried in the `action` text ("typically
+   Spring 2027", "around mid-June") is both redundant and unsortable.
+   Give your best estimate rather than leaving both fields null; an
+   approximate window is more useful than none.
+
+   When the real trigger is a *measurement* rather than a calendar
+   date — a soil-temperature threshold, a rainfall event, green-up —
+   state it in `conditional` **and** still provide the date window you
+   expect that condition to fall in. `conditional` is the gate;
+   `earliest`/`latest` are the plan.
+
 ## Inputs
 
 You will receive, in this order:
