@@ -7,6 +7,7 @@ output medium. Adding a new sink is a single class plus an entry in
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Protocol
 
 from rich.console import Console
@@ -17,6 +18,7 @@ from lawn_agents.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from datetime import date
     from typing import TextIO
 
     from lawn_agents.config import AppConfig, SinkName
@@ -88,7 +90,9 @@ class ConsoleSink:
 
         citations_by_index: dict[str, int] = {}
         self._emit_action_section("This week", rec.weekly_actions, citations_by_index)
-        self._emit_action_section("This month", rec.monthly_actions, citations_by_index)
+        self._emit_action_section(
+            _monthly_heading(rec.monthly_actions), rec.monthly_actions, citations_by_index
+        )
 
         if rec.notes:
             self._console.print("\n[bold]Notes:[/bold]")
@@ -127,12 +131,20 @@ class ConsoleSink:
     ) -> str:
         if not citations:
             return ""
+        # An item often cites the same document several times (different
+        # snippets from one factsheet). They collapse to one entry in the
+        # Sources block, so repeating the marker renders as "[1] [1] [1]"
+        # — noise that reads like three separate sources.
+        seen: set[int] = set()
         markers: list[str] = []
         for c in citations:
             key = _citation_key(c)
             if key not in citations_by_index:
                 citations_by_index[key] = len(citations_by_index) + 1
-            markers.append(f"[{citations_by_index[key]}]")
+            idx = citations_by_index[key]
+            if idx not in seen:
+                seen.add(idx)
+                markers.append(f"[{idx}]")
         return " " + " ".join(markers)
 
 
@@ -178,6 +190,31 @@ def _citation_key(c: Citation) -> str:
     if c.auto_researched:
         parts.append("[auto-researched, unreviewed]")
     return " — ".join(parts)
+
+
+MONTHLY_HORIZON_DAYS = 31
+"""Past this many days out, `monthly_actions` is no longer 'this month'."""
+
+
+def _monthly_heading(actions: Sequence[CalendarItem], *, today: date | None = None) -> str:
+    """Label for the `monthly_actions` section, based on how far it reaches.
+
+    `monthly_actions` is really "everything that isn't this week," and
+    a target-date question can fill it with a schedule running months
+    out. The 2026-09-02 acceptance run planned to a July 2027 birthday
+    and printed all nine items under a flat "This month:" header.
+
+    So the heading follows the data: if any item is dated beyond
+    `MONTHLY_HORIZON_DAYS`, the section is a schedule, not a month.
+    Undated items keep the original label — that's the ad-hoc case
+    where "this month" was accurate all along.
+    """
+    ref = today or datetime.now(UTC).date()
+    horizon = ref + timedelta(days=MONTHLY_HORIZON_DAYS)
+    for item in actions:
+        if any(d is not None and d > horizon for d in (item.earliest, item.latest)):
+            return "Planned schedule"
+    return "This month"
 
 
 def _format_window(earliest: object, latest: object) -> str:

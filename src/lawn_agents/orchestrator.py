@@ -41,7 +41,7 @@ from lawn_agents.models import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from lawn_agents.config import AppConfig, Settings
+    from lawn_agents.config import AppConfig, Settings, SourceTiersConfig
     from lawn_agents.llm import ChatModel
     from lawn_agents.models import DroughtSnapshot, Passage, SoilSnapshot, WeatherSnapshot
 
@@ -135,18 +135,17 @@ def answer(
 
     conditions = _fetch_conditions(settings.app, wfn, sfn, dfn)
     weed_matches = detect_weeds_in_question(question, settings.weeds)
+    brand_matches = detect_brands_in_question(question, settings.chemicals)
     passages = _retrieve_with_weed_aliases(question, weed_matches, settings.app, rfn)
 
     # Tiered relevance check: lexical-overlap miss in the medium band
-    # escalates to a cheap LLM gate via the router model.
-    alias_terms: list[str] = []
-    for weed in weed_matches.values():
-        alias_terms.extend(weed.aliases)
+    # escalates to a cheap LLM gate via the router model. Both bridges
+    # contribute vocabulary — see `_bridge_lexical_terms`.
     if settings.app.research.enabled and knowledge.is_weak(
         passages,
         settings.app,
         query=question,
-        extra_terms=alias_terms,
+        extra_terms=_bridge_lexical_terms(weed_matches, brand_matches),
         relevance_gate=_make_relevance_gate(router_chat),
     ):
         log.info("orchestrator.retrieval_weak.invoking_research")
@@ -165,7 +164,9 @@ def answer(
         passages=passages,
         chemicals=settings.chemicals,
         weeds=settings.weeds,
+        tiers=settings.app.knowledge.source_tiers,
         weed_matches=weed_matches,
+        brand_matches=brand_matches,
         synthesizer=synthesizer_chat,
     )
 
@@ -314,6 +315,39 @@ def _retrieve_with_weed_aliases(
     return [passage_by_key[k] for k in ranked_keys[:top_k]]
 
 
+def _bridge_lexical_terms(
+    weed_matches: dict[str, WeedAlias],
+    brand_matches: dict[str, ChemicalBrand],
+) -> list[str]:
+    """Vocabulary the bridges add to the question, for `is_weak`'s lexical check.
+
+    Both bridges exist because the user's vocabulary and the corpus's
+    vocabulary differ: the user says "GrubX" or "Japanese clover", the
+    extension factsheet says "chlorantraniliprole" or "annual
+    lespedeza". The synthesizer gets told about both mappings via
+    `<brand_bridge>` / `<weed_bridge>`, but `knowledge.is_weak` runs
+    *before* synthesis and only sees the raw question.
+
+    Without this, the lexical-overlap check compares the user's words
+    against a passage that never uses them, misses, and escalates to
+    the LLM relevance gate — which is equally blind and returns "not
+    relevant." Observed live on 2026-09-02: "Is it too late to treat
+    with GrubX?" retrieved the Clemson white-grub factsheet at 0.644
+    (medium band), was marked weak, fired a pointless research call,
+    and then the synthesizer answered correctly from that very passage.
+
+    Feeding both bridges' terms in as `extra_terms` closes the gap. The
+    weed side was already wired (ADR 0008); the brand side (ADR 0007)
+    was not.
+    """
+    terms: list[str] = []
+    for weed in weed_matches.values():
+        terms.extend(weed.aliases)
+    for brand in brand_matches.values():
+        terms.extend(brand.active_ingredients)
+    return terms
+
+
 _RELEVANCE_GATE_SYSTEM = (
     "You are a relevance gate. Given a USER QUESTION and a RETRIEVED PASSAGE, "
     "output exactly one word: 'yes' if the passage contains information that "
@@ -369,19 +403,27 @@ def _synthesize_with_guardrail(
     passages: list[Passage],
     chemicals: ChemicalsConfig,
     weeds: WeedsConfig,
+    tiers: SourceTiersConfig,
     weed_matches: dict[str, WeedAlias] | None = None,
+    brand_matches: dict[str, ChemicalBrand] | None = None,
     synthesizer: ChatModel,
 ) -> Recommendation:
     system = _load_prompt("synthesizer.md")
-    brand_bridge = _brand_bridge_text(detect_brands_in_question(question, chemicals))
-    # Caller may have already detected weeds (for retrieval-query expansion);
-    # re-use that work to avoid a second regex scan.
+    # Caller may have already detected weeds/brands (for retrieval-query
+    # expansion and the relevance check); re-use that work to avoid a
+    # second regex scan.
+    brand_matches = (
+        brand_matches
+        if brand_matches is not None
+        else detect_brands_in_question(question, chemicals)
+    )
+    brand_bridge = _brand_bridge_text(brand_matches)
     weed_matches = (
         weed_matches if weed_matches is not None else detect_weeds_in_question(question, weeds)
     )
     weed_bridge = _weed_bridge_text(weed_matches)
     user_prompt = _synthesizer_user_prompt(
-        question, intent, conditions, passages, brand_bridge, weed_bridge
+        question, intent, conditions, passages, tiers, brand_bridge, weed_bridge
     )
 
     try:
@@ -437,6 +479,7 @@ def _synthesizer_user_prompt(
     intent: Intent,
     conditions: Conditions,
     passages: list[Passage],
+    tiers: SourceTiersConfig,
     brand_bridge: str = "",
     weed_bridge: str = "",
 ) -> str:
@@ -446,7 +489,7 @@ def _synthesizer_user_prompt(
         f"<intent>{intent}</intent>\n\n"
         f"<conditions>\n{conditions.model_dump_json(indent=2)}\n</conditions>\n\n"
         f"<question>{question}</question>{bridge_block}\n\n"
-        f"<sources>\n{_format_sources(passages)}\n</sources>"
+        f"<sources>\n{knowledge.format_sources(passages, tiers)}\n</sources>"
     )
 
 
@@ -549,22 +592,6 @@ def _weed_bridge_text(matched: dict[str, WeedAlias]) -> str:
         lines.append(line)
     lines.append("</weed_bridge>")
     return "\n".join(lines)
-
-
-def _format_sources(passages: list[Passage]) -> str:
-    if not passages:
-        return "(no relevant passages retrieved)"
-    parts: list[str] = []
-    for i, p in enumerate(passages, start=1):
-        review_flag = " [unreviewed]" if p.requires_review else ""
-        page_str = f", page {p.page}" if p.page is not None else ""
-        url_str = f", url {p.url}" if p.url else ""
-        parts.append(
-            f"[{i}] source_id={p.source_id!r} title={p.source_title!r}"
-            f"{page_str}{url_str}{review_flag} score={p.score:.3f}\n"
-            f"    {p.content}"
-        )
-    return "\n\n".join(parts)
 
 
 def _refusal(reason: str) -> Recommendation:
