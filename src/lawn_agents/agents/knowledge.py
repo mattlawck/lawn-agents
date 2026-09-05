@@ -309,9 +309,15 @@ def is_weak(
     - ``score >= strong``      → trust the top passage; skip checks.
     - ``weak <= score < strong`` → run a lexical-overlap check between
       the query (+ `extra_terms` — the weed aliases and brand active
-      ingredients the bridges would add) and the top passage. On miss,
-      optionally escalate to a `relevance_gate` LLM check. Either
-      failure marks the result weak.
+      ingredients the bridges would add) and **every** retrieved
+      passage. On miss, optionally escalate to a `relevance_gate` LLM
+      check against the top passage. Either failure marks the result
+      weak.
+
+    The band is keyed off the top passage's score, but the lexical
+    check scans the whole set: the synthesizer receives all `top_k`
+    passages, so relevance is a property of the set, not of its first
+    member.
     - ``score < weak``         → mark weak (research subagent fires).
 
     The tiered structure pays compute only for the ambiguous middle.
@@ -356,13 +362,21 @@ def is_weak(
         # without forcing them to pass through query/aliases/gate.
         return False
 
-    if _has_lexical_overlap(query, top, extra_terms):
+    # Scan every retrieved passage, not just the top one. The
+    # synthesizer is handed the whole top-k set, so judging the set's
+    # relevance from its first member alone measures the wrong thing.
+    # Observed live 2026-09-02: "Is it too late to treat with GrubX?"
+    # put the grub-identification chunk at rank 0 and the
+    # chlorantraniliprole chunk at rank 4 — the answer came from rank 4
+    # while the check failed on rank 0.
+    if any(_has_lexical_overlap(query, p, extra_terms) for p in passages):
         return False
 
     log.info(
         "knowledge.is_weak.medium_lexical_miss",
         score=top.score,
         source=top.source_id,
+        passages_scanned=len(passages),
     )
     if relevance_gate is None:
         return True

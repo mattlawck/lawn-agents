@@ -140,6 +140,45 @@ class TestConsoleSink:
         sink.emit(rec)
 
 
+class TestCitationMarkers:
+    def test_repeated_citation_renders_one_marker(self) -> None:
+        """Three snippets from one factsheet is one source, so one marker.
+
+        Seen live on 2026-09-02: an item citing the Clemson white-grub
+        factsheet three times rendered as "[1] [1] [1]", which reads
+        like three independent sources.
+        """
+        rec = Recommendation(
+            headline="x",
+            conditions_summary="",
+            weekly_actions=[
+                CalendarItem(
+                    category=ChemicalCategory.INSECTICIDE,
+                    action="Do not apply now",
+                    citations=[_citation(), _citation(), _citation()],
+                )
+            ],
+        )
+        out = _render(rec)
+        assert "[1] [1]" not in out
+        assert "[1]" in out
+
+    def test_distinct_citations_each_get_a_marker(self) -> None:
+        rec = Recommendation(
+            headline="x",
+            conditions_summary="",
+            weekly_actions=[
+                CalendarItem(
+                    category=ChemicalCategory.INSECTICIDE,
+                    action="Apply",
+                    citations=[_citation(), _citation(title="NCSU TurfFiles")],
+                )
+            ],
+        )
+        out = _render(rec)
+        assert "[1] [2]" in out
+
+
 class TestMonthlyHeading:
     """`monthly_actions` is 'everything not this week', so the heading follows the dates.
 

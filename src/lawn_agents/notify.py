@@ -131,12 +131,20 @@ class ConsoleSink:
     ) -> str:
         if not citations:
             return ""
+        # An item often cites the same document several times (different
+        # snippets from one factsheet). They collapse to one entry in the
+        # Sources block, so repeating the marker renders as "[1] [1] [1]"
+        # — noise that reads like three separate sources.
+        seen: set[int] = set()
         markers: list[str] = []
         for c in citations:
             key = _citation_key(c)
             if key not in citations_by_index:
                 citations_by_index[key] = len(citations_by_index) + 1
-            markers.append(f"[{citations_by_index[key]}]")
+            idx = citations_by_index[key]
+            if idx not in seen:
+                seen.add(idx)
+                markers.append(f"[{idx}]")
         return " " + " ".join(markers)
 
 

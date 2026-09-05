@@ -604,6 +604,44 @@ class TestBridgeLexicalTerms:
         # contains it, lexical overlap hits, and the result is strong.
         assert research_calls == []
 
+    def test_bridge_term_in_lower_ranked_passage_still_counts(self, settings: Settings) -> None:
+        """Relevance is a property of the retrieved set, not of rank 0.
+
+        The live corpus put the grub-identification chunk at rank 0 and
+        the chlorantraniliprole chunk at rank 4. The synthesizer sees
+        all five and answered from rank 4, so judging the set weak on
+        rank 0 alone measured the wrong thing.
+        """
+        retrieval = settings.app.knowledge.retrieval
+        medium = (retrieval.weak_score_threshold + retrieval.strong_score_threshold) / 2
+        rec = _good_recommendation()
+        research_calls: list[str] = []
+
+        def fake_research(q: str, _c: Any) -> list[Passage]:
+            research_calls.append(q)
+            return []
+
+        off_topic = Passage(
+            content="Grubs can be identified by the rastral pattern on their underside.",
+            score=medium,
+            source_id="clemson-grub-id",
+            source_title="White Grub Management in Turfgrass",
+            url="https://hgic.clemson.edu/factsheet/white-grub-management-in-turfgrass/",
+        )
+        orchestrator.answer(
+            "Is it too late to treat with GrubX?",
+            settings,
+            router=FakeChatModel(text_response="ad-hoc"),
+            synthesizer=FakeChatModel(structured_responses=[rec]),
+            weather_fn=lambda _c: _weather_snapshot(),
+            soil_fn=lambda _c: _soil_snapshot(),
+            drought_fn=lambda _c: _drought_snapshot(),
+            # Bridge term appears only in the last passage.
+            retrieve_fn=lambda _q, _c: [off_topic, self._brand_passage(medium - 0.02)],
+            research_fn=fake_research,
+        )
+        assert research_calls == []
+
     def test_unbridged_brand_still_escalates(self, settings: Settings) -> None:
         """Control: a question with no bridge vocabulary still goes weak.
 
