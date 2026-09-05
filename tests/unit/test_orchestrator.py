@@ -14,6 +14,7 @@ from lawn_agents.config import Settings
 from lawn_agents.models import (
     CalendarItem,
     ChemicalCategory,
+    ChemicalsConfig,
     Citation,
     DroughtSnapshot,
     GeneralCategory,
@@ -23,6 +24,7 @@ from lawn_agents.models import (
     WeatherSnapshot,
     WeedAlias,
     WeedCategory,
+    WeedsConfig,
 )
 
 # --- fakes ----------------------------------------------------------------
@@ -502,6 +504,173 @@ class TestResearchInvocation:
         # Research failure doesn't abort synthesis — we just keep the
         # weak passages and let the model decide.
         assert result.refused is False
+
+
+class TestBridgeLexicalTerms:
+    """Both bridges must feed `is_weak`'s lexical-overlap check.
+
+    Regression for the 2026-09-02 acceptance run: the brand bridge
+    (ADR 0007) reached the synthesizer prompt but not the relevance
+    check, so "Is it too late to treat with GrubX?" compared the word
+    "grubx" against a passage that only says "chlorantraniliprole",
+    missed, escalated to the LLM gate, and got a false "not relevant"
+    — firing a pointless research call before the synthesizer answered
+    correctly from that same passage.
+    """
+
+    @pytest.fixture
+    def settings(self, config_yaml_path: Path) -> Settings:
+        """Settings with a minimal brand + weed bridge attached.
+
+        `chemicals_file` / `weeds_file` are cwd-relative and conftest
+        chdirs to a temp dir, so the real data files never load here.
+        Building the bridges inline keeps the test hermetic — it asserts
+        the wiring, not the contents of `data/chemicals.yaml`.
+        """
+        loaded = Settings.load(config_yaml_path)
+        return loaded.model_copy(
+            update={
+                "chemicals": ChemicalsConfig.model_validate(
+                    {
+                        "brands": {
+                            "GrubX": {
+                                "active_ingredients": ["chlorantraniliprole"],
+                                "category": "insecticide",
+                            }
+                        }
+                    }
+                ),
+                "weeds": WeedsConfig.model_validate(
+                    {
+                        "weeds": {
+                            "Japanese clover": {
+                                "aliases": ["annual lespedeza", "Lespedeza striata"],
+                                "category": "broadleaf",
+                            }
+                        }
+                    }
+                ),
+            }
+        )
+
+    def _brand_passage(self, score: float) -> Passage:
+        """A medium-band passage using chemistry vocabulary, not the brand."""
+        return Passage(
+            content=(
+                "Preventive white grub control with chlorantraniliprole is most "
+                "effective when applied from April through early July, before "
+                "eggs hatch."
+            ),
+            score=score,
+            source_id="url:https://hgic.clemson.edu/factsheet/white-grub-management-in-turfgrass/",
+            source_title="White Grub Management in Turfgrass",
+            url="https://hgic.clemson.edu/factsheet/white-grub-management-in-turfgrass/",
+        )
+
+    def test_brand_active_ingredients_are_included(self, settings: Settings) -> None:
+        brands = orchestrator.detect_brands_in_question("treat with GrubX?", settings.chemicals)
+        terms = orchestrator._bridge_lexical_terms({}, brands)
+        assert "chlorantraniliprole" in terms
+
+    def test_weed_aliases_are_still_included(self, settings: Settings) -> None:
+        weeds = orchestrator.detect_weeds_in_question("I have Japanese clover", settings.weeds)
+        terms = orchestrator._bridge_lexical_terms(weeds, {})
+        assert "annual lespedeza" in terms
+
+    def test_branded_question_does_not_fire_research(self, settings: Settings) -> None:
+        """The GrubX regression, end to end through `answer`."""
+        retrieval = settings.app.knowledge.retrieval
+        # Squarely in the medium band, where the lexical check runs.
+        medium = (retrieval.weak_score_threshold + retrieval.strong_score_threshold) / 2
+        rec = _good_recommendation()
+        research_calls: list[str] = []
+
+        def fake_research(q: str, _c: Any) -> list[Passage]:
+            research_calls.append(q)
+            return []
+
+        orchestrator.answer(
+            "Is it too late to treat with GrubX?",
+            settings,
+            router=FakeChatModel(text_response="ad-hoc"),
+            synthesizer=FakeChatModel(structured_responses=[rec]),
+            weather_fn=lambda _c: _weather_snapshot(),
+            soil_fn=lambda _c: _soil_snapshot(),
+            drought_fn=lambda _c: _drought_snapshot(),
+            retrieve_fn=lambda _q, _c: [self._brand_passage(medium)],
+            research_fn=fake_research,
+        )
+        # The brand bridge supplies "chlorantraniliprole", the passage
+        # contains it, lexical overlap hits, and the result is strong.
+        assert research_calls == []
+
+    def test_bridge_term_in_lower_ranked_passage_still_counts(self, settings: Settings) -> None:
+        """Relevance is a property of the retrieved set, not of rank 0.
+
+        The live corpus put the grub-identification chunk at rank 0 and
+        the chlorantraniliprole chunk at rank 4. The synthesizer sees
+        all five and answered from rank 4, so judging the set weak on
+        rank 0 alone measured the wrong thing.
+        """
+        retrieval = settings.app.knowledge.retrieval
+        medium = (retrieval.weak_score_threshold + retrieval.strong_score_threshold) / 2
+        rec = _good_recommendation()
+        research_calls: list[str] = []
+
+        def fake_research(q: str, _c: Any) -> list[Passage]:
+            research_calls.append(q)
+            return []
+
+        off_topic = Passage(
+            content="Grubs can be identified by the rastral pattern on their underside.",
+            score=medium,
+            source_id="clemson-grub-id",
+            source_title="White Grub Management in Turfgrass",
+            url="https://hgic.clemson.edu/factsheet/white-grub-management-in-turfgrass/",
+        )
+        orchestrator.answer(
+            "Is it too late to treat with GrubX?",
+            settings,
+            router=FakeChatModel(text_response="ad-hoc"),
+            synthesizer=FakeChatModel(structured_responses=[rec]),
+            weather_fn=lambda _c: _weather_snapshot(),
+            soil_fn=lambda _c: _soil_snapshot(),
+            drought_fn=lambda _c: _drought_snapshot(),
+            # Bridge term appears only in the last passage.
+            retrieve_fn=lambda _q, _c: [off_topic, self._brand_passage(medium - 0.02)],
+            research_fn=fake_research,
+        )
+        assert research_calls == []
+
+    def test_unbridged_brand_still_escalates(self, settings: Settings) -> None:
+        """Control: a question with no bridge vocabulary still goes weak.
+
+        Guards against the fix degenerating into "never weak" — a
+        question whose terms genuinely don't appear in the passage must
+        still reach the gate and fire research.
+        """
+        retrieval = settings.app.knowledge.retrieval
+        medium = (retrieval.weak_score_threshold + retrieval.strong_score_threshold) / 2
+        rec = _good_recommendation()
+        research_calls: list[str] = []
+
+        def fake_research(q: str, _c: Any) -> list[Passage]:
+            research_calls.append(q)
+            return []
+
+        orchestrator.answer(
+            "When should I dethatch?",
+            settings,
+            # Gate says "not relevant" — the escalation path we keep.
+            router=FakeChatModel(text_response="no"),
+            synthesizer=FakeChatModel(structured_responses=[rec]),
+            weather_fn=lambda _c: _weather_snapshot(),
+            soil_fn=lambda _c: _soil_snapshot(),
+            drought_fn=lambda _c: _drought_snapshot(),
+            retrieve_fn=lambda _q, _c: [self._brand_passage(medium)],
+            research_fn=fake_research,
+        )
+        assert research_calls == ["When should I dethatch?"]
 
 
 class TestRetrieveWithWeedAliases:

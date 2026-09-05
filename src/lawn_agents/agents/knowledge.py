@@ -23,13 +23,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from lawn_agents.logging import get_logger
-from lawn_agents.models import Passage
+from lawn_agents.models import Passage, SourceTier
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from datetime import datetime
 
-    from lawn_agents.config import AppConfig
+    from lawn_agents.config import AppConfig, SourceTiersConfig
 
 log = get_logger(__name__)
 
@@ -308,9 +308,16 @@ def is_weak(
 
     - ``score >= strong``      → trust the top passage; skip checks.
     - ``weak <= score < strong`` → run a lexical-overlap check between
-      the query (+ `extra_terms`, e.g. weed_bridge aliases) and the
-      top passage. On miss, optionally escalate to a `relevance_gate`
-      LLM check. Either failure marks the result weak.
+      the query (+ `extra_terms` — the weed aliases and brand active
+      ingredients the bridges would add) and **every** retrieved
+      passage. On miss, optionally escalate to a `relevance_gate` LLM
+      check against the top passage. Either failure marks the result
+      weak.
+
+    The band is keyed off the top passage's score, but the lexical
+    check scans the whole set: the synthesizer receives all `top_k`
+    passages, so relevance is a property of the set, not of its first
+    member.
     - ``score < weak``         → mark weak (research subagent fires).
 
     The tiered structure pays compute only for the ambiguous middle.
@@ -323,8 +330,11 @@ def is_weak(
         passages: Output of `retrieve`.
         config: Application configuration (used for thresholds).
         query: User question text; required for lexical / gate checks.
-        extra_terms: Additional terms (e.g. weed aliases) to count as
-            query vocabulary for the lexical overlap check.
+        extra_terms: Additional terms to count as query vocabulary for
+            the lexical overlap check — weed aliases (ADR 0008) and brand
+            active ingredients (ADR 0007). The corpus discusses chemistry
+            and scientific names; users ask by brand and common name, so
+            without these the check compares two disjoint vocabularies.
         relevance_gate: Optional callable
             ``(query, top_passage) -> is_relevant``. Invoked only when
             lexical overlap fails in the medium band. Pass None to
@@ -352,13 +362,21 @@ def is_weak(
         # without forcing them to pass through query/aliases/gate.
         return False
 
-    if _has_lexical_overlap(query, top, extra_terms):
+    # Scan every retrieved passage, not just the top one. The
+    # synthesizer is handed the whole top-k set, so judging the set's
+    # relevance from its first member alone measures the wrong thing.
+    # Observed live 2026-09-02: "Is it too late to treat with GrubX?"
+    # put the grub-identification chunk at rank 0 and the
+    # chlorantraniliprole chunk at rank 4 — the answer came from rank 4
+    # while the check failed on rank 0.
+    if any(_has_lexical_overlap(query, p, extra_terms) for p in passages):
         return False
 
     log.info(
         "knowledge.is_weak.medium_lexical_miss",
         score=top.score,
         source=top.source_id,
+        passages_scanned=len(passages),
     )
     if relevance_gate is None:
         return True
@@ -372,6 +390,58 @@ def is_weak(
         return True
     log.info("knowledge.is_weak.gate_verdict", relevant=relevant)
     return not relevant
+
+
+def classify_source(passage: Passage, tiers: SourceTiersConfig) -> SourceTier:
+    """Classify a passage's provenance into a `SourceTier` (ADR 0009).
+
+    Matches configured substrings against the passage's URL,
+    `source_id`, and `source_title` combined, so both web sources and
+    local corpus PDFs (which have no URL) can be tiered.
+
+    Precedence is `label` → `extension` → `vendor`: trust travels with
+    the document, not the host. A manufacturer label mirrored on a
+    retailer's domain is still a label, and matching the label patterns
+    first is what keeps it one.
+    """
+    haystack = " ".join(
+        part for part in (passage.url, passage.source_id, passage.source_title) if part
+    ).lower()
+    for tier, patterns in (
+        (SourceTier.LABEL, tiers.label),
+        (SourceTier.EXTENSION, tiers.extension),
+        (SourceTier.VENDOR, tiers.vendor),
+    ):
+        if any(pattern.lower() in haystack for pattern in patterns):
+            return tier
+    return SourceTier.UNKNOWN
+
+
+def format_sources(passages: list[Passage], tiers: SourceTiersConfig) -> str:
+    """Render retrieved passages as the `<sources>` block for a prompt.
+
+    Shared by the orchestrator and the planner — they had byte-identical
+    private copies before tiering gave them a reason to diverge, and one
+    of them would have been updated without the other.
+
+    Each entry carries a `tier=` marker so the synthesizer can weigh
+    extension guidance against vendor marketing instead of treating
+    every cited passage as equally authoritative.
+    """
+    if not passages:
+        return "(no relevant passages retrieved)"
+    parts: list[str] = []
+    for i, p in enumerate(passages, start=1):
+        review_flag = " [unreviewed]" if p.requires_review else ""
+        page_str = f", page {p.page}" if p.page is not None else ""
+        url_str = f", url {p.url}" if p.url else ""
+        tier = classify_source(p, tiers)
+        parts.append(
+            f"[{i}] source_id={p.source_id!r} title={p.source_title!r}"
+            f"{page_str}{url_str} tier={tier.value}{review_flag} score={p.score:.3f}\n"
+            f"    {p.content}"
+        )
+    return "\n\n".join(parts)
 
 
 _STOPWORDS = frozenset(

@@ -42,7 +42,7 @@ from lawn_agents.orchestrator import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from lawn_agents.config import AppConfig, Settings
+    from lawn_agents.config import AppConfig, Settings, SourceTiersConfig
     from lawn_agents.llm import ChatModel
     from lawn_agents.models import (
         ChemicalsConfig,
@@ -173,6 +173,7 @@ def _plan(
         passages=passages,
         chemicals=settings.chemicals,
         weeds=settings.weeds,
+        tiers=settings.app.knowledge.source_tiers,
         weed_matches=weed_matches,
         synthesizer=synth_chat,
     )
@@ -199,6 +200,7 @@ def _synthesize_plan_with_guardrail(
     passages: list[Passage],
     chemicals: ChemicalsConfig,
     weeds: WeedsConfig,
+    tiers: SourceTiersConfig,
     weed_matches: dict[str, WeedAlias] | None = None,
     synthesizer: ChatModel,
 ) -> Recommendation:
@@ -209,7 +211,7 @@ def _synthesize_plan_with_guardrail(
     )
     weed_bridge = _weed_bridge_text(weed_matches)
     user_prompt = _planner_user_prompt(
-        scope, target, conditions, passages, brand_bridge, weed_bridge
+        scope, target, conditions, passages, tiers, brand_bridge, weed_bridge
     )
 
     try:
@@ -261,6 +263,7 @@ def _planner_user_prompt(
     target: str,
     conditions: Conditions,
     passages: list[Passage],
+    tiers: SourceTiersConfig,
     brand_bridge: str = "",
     weed_bridge: str = "",
 ) -> str:
@@ -271,24 +274,8 @@ def _planner_user_prompt(
         f"<today>{now}</today>\n\n"
         f'<plan_target scope="{scope}">{target}</plan_target>{bridge_block}\n\n'
         f"<conditions>\n{conditions.model_dump_json(indent=2)}\n</conditions>\n\n"
-        f"<sources>\n{_format_sources(passages)}\n</sources>"
+        f"<sources>\n{knowledge.format_sources(passages, tiers)}\n</sources>"
     )
-
-
-def _format_sources(passages: list[Passage]) -> str:
-    if not passages:
-        return "(no relevant passages retrieved)"
-    parts: list[str] = []
-    for i, p in enumerate(passages, start=1):
-        review_flag = " [unreviewed]" if p.requires_review else ""
-        page_str = f", page {p.page}" if p.page is not None else ""
-        url_str = f", url {p.url}" if p.url else ""
-        parts.append(
-            f"[{i}] source_id={p.source_id!r} title={p.source_title!r}"
-            f"{page_str}{url_str}{review_flag} score={p.score:.3f}\n"
-            f"    {p.content}"
-        )
-    return "\n\n".join(parts)
 
 
 def _load_prompt(name: str) -> str:

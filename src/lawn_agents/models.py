@@ -47,6 +47,38 @@ class GeneralCategory(StrEnum):
 ItemCategory = ChemicalCategory | GeneralCategory
 
 
+class SourceTier(StrEnum):
+    """What kind of authority a retrieved passage carries.
+
+    Every passage in `<sources>` currently reads as equally
+    authoritative to the synthesizer. It isn't. The 2026-09-02
+    acceptance run recommended three Yard Mastery SKUs, correctly
+    cited to a Lawn Care Nut guide — real citations to a real
+    document, and a vendor recommending its own product line. The
+    guardrail (ADR 0003) can't see the difference because it only
+    checks that a citation *exists*.
+
+    Tiers make the difference visible to the synthesizer so it can
+    weigh sources rather than treat them as interchangeable. See
+    ADR 0009.
+    """
+
+    EXTENSION = "extension"
+    """Land-grant extension / university / government. Best for timing
+    and agronomy; vendor-neutral."""
+
+    LABEL = "label"
+    """EPA-registered product label or manufacturer product guide.
+    Authoritative for rate, weed list, REI, and turf tolerance."""
+
+    VENDOR = "vendor"
+    """Sod producer, retailer, or product marketing. Useful for
+    cultivar specifics and SKU math; may be promoting its own line."""
+
+    UNKNOWN = "unknown"
+    """Unmatched provenance — treat with the caution of a vendor source."""
+
+
 class Citation(BaseModel):
     """A pointer to the source passage that backs a recommendation.
 

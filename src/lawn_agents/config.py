@@ -83,6 +83,65 @@ class RetrievalConfig(BaseModel):
     strong_score_threshold: float = 0.70
 
 
+class SourceTiersConfig(BaseModel):
+    """Patterns that map a passage's provenance to a `SourceTier` (ADR 0009).
+
+    Each list holds case-insensitive substrings matched against a
+    passage's URL, `source_id`, and `source_title` combined. Substring
+    rather than host matching is deliberate: it lets a local corpus PDF
+    be tiered by its title (`"Warm Season E-Guide"`) using the same
+    mechanism as a URL (`"hgic.clemson.edu"`).
+
+    Precedence is most-specific-first — `label`, then `extension`, then
+    `vendor` — because trust travels with the *document*, not the host
+    serving it. A Bayer label mirrored on a retailer's site is still a
+    label.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: list[str] = Field(
+        default_factory=lambda: [
+            "cdms.net",
+            "envu.com",
+            "greenbook.net",
+            "-label",
+            "_label",
+            "label.pdf",
+            "product-guide",
+        ]
+    )
+    extension: list[str] = Field(
+        default_factory=lambda: [
+            "hgic.clemson.edu",
+            "clemson.edu",
+            "extension.uga.edu",
+            "turffiles.ncsu.edu",
+            "content.ces.ncsu.edu",
+            "ces.ncsu.edu",
+            "edis.ifas.ufl.edu",
+            "ifas.ufl.edu",
+            ".edu",
+            "extension.",
+            "usda.gov",
+            "noaa.gov",
+            "drought.gov",
+            "weather.gov",
+        ]
+    )
+    vendor: list[str] = Field(
+        default_factory=lambda: [
+            "supersod.com",
+            "sodsolutions.com",
+            "theturfgrassgroup.com",
+            "yardmastery.com",
+            "domyown.com",
+            "siteone.com",
+            "scotts.com",
+        ]
+    )
+
+
 class KnowledgeConfig(BaseModel):
     """RAG layer configuration."""
 
@@ -94,6 +153,7 @@ class KnowledgeConfig(BaseModel):
     chunk_size_tokens: int = 700
     chunk_overlap_tokens: int = 100
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
+    source_tiers: SourceTiersConfig = Field(default_factory=SourceTiersConfig)
 
 
 class ResearchConfig(BaseModel):
