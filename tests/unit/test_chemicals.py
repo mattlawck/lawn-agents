@@ -86,6 +86,48 @@ class TestSeededChemicalsFile:
         assert brand.active_ingredients == ["halosulfuron-methyl"]
         assert brand.category.value == "herbicide"
 
+    def test_fusilade_ii_is_fluazifop(self, chemicals: ChemicalsConfig) -> None:
+        """Fusilade II — ACCase (Group 1) graminicide; EPA Reg. 100-1084."""
+        brand = chemicals.brands["Fusilade II"]
+        assert brand.active_ingredients == ["fluazifop-P-butyl"]
+        assert brand.category.value == "herbicide"
+        # The home-lawn site restriction is the load-bearing fact for a
+        # residential Zeon lawn; keep it in the bridge text.
+        assert "home lawns" in (brand.notes or "")
+
+    def test_recognition_is_trifloxysulfuron(self, chemicals: ChemicalsConfig) -> None:
+        """Recognition — ALS (Group 2); EPA Reg. 100-1658.
+
+        Verified against the EPA-stamped master label rather than retail
+        copy: a web summariser reported the tank-mix partner's chemistry
+        (fluazifop) as Recognition's own active ingredient.
+        """
+        brand = chemicals.brands["Recognition"]
+        assert brand.active_ingredients == ["trifloxysulfuron-sodium"]
+        assert brand.category.value == "herbicide"
+
+    def test_monument_ii_matches_recognition(self, chemicals: ChemicalsConfig) -> None:
+        """Alternate brand name on the same registration — same chemistry."""
+        assert (
+            chemicals.brands["Monument II"].active_ingredients
+            == chemicals.brands["Recognition"].active_ingredients
+        )
+
+    def test_goosegrass_tank_mix_partners_are_different_moa_groups(
+        self, chemicals: ChemicalsConfig
+    ) -> None:
+        """The labeled goosegrass mix pairs Group 1 with Group 2 chemistry.
+
+        Recognition is an ALS inhibitor — the same group as Sedgehammer's
+        halosulfuron-methyl — so rotation planning has to treat them as
+        one group, not two products.
+        """
+        fusilade = chemicals.brands["Fusilade II"].active_ingredients
+        recognition = chemicals.brands["Recognition"].active_ingredients
+        sedgehammer = chemicals.brands["Sedgehammer"].active_ingredients
+        assert not set(fusilade) & set(recognition)
+        assert not set(recognition) & set(sedgehammer)
+
     def test_seeded_set_covers_all_chemical_categories(self, chemicals: ChemicalsConfig) -> None:
         categories = {b.category.value for b in chemicals.brands.values()}
         assert categories == {"insecticide", "herbicide", "fungicide", "fertilizer"}
