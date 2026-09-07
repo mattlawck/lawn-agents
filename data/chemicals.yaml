@@ -63,6 +63,21 @@ brands:
     category: herbicide
     notes: "Bonide consumer brand; PPO-inhibitor post-emergent (Group 14 — different mode of action from Sedgehammer's ALS-inhibitor halosulfuron-methyl). Contact / above-ground burndown action: fast visible damage (days), full kill 2-3 weeks. Controls nutsedge plus a broader set of broadleaf weeds (dollarweed, spurge, oxalis). Common residential SKU. Often paired with halosulfuron-methyl (Sedgehammer) sequentially for tough nutsedge infestations — sulfentrazone burns the foliage quickly while halosulfuron translocates to kill nutlets. Apply on actively growing sedge to dry foliage during warm weather. Safe on most warm-season turf including Zoysia at labeled rates."
 
+  "Fusilade II":
+    active_ingredients: ["fluazifop-P-butyl"]
+    category: herbicide
+    notes: "Syngenta; EPA Reg. 100-1084. 24.5% fluazifop-P-butyl (2 lb ai/gal). ACCase inhibitor (Group 1) — selective systemic graminicide, moves into shoots, roots, rhizomes and stolons of grass weeds. On Zoysia the label covers suppression/control of common and hybrid bermudagrass and other grass weeds at 3-6 oz/A (0.07-0.14 oz per 1000 sqft) with 0.25% v/v non-ionic surfactant, every 28 days; over-spray Zoysia use is 3-4 oz/A starting around June 1. Label says to apply in spring and fall and AVOID July-August, and not to apply to turf under stress. IMPORTANT SITE RESTRICTION: the desirable-turfgrass section states 'Not for use on home lawns' and the label elsewhere states 'NO APPLICATIONS SHALL BE MADE IN OR AROUND HOMES' — check this against your site before recommending. Rate in the Recognition tank mix is far higher (16-24 oz/A on Zoysia) than the standalone Zoysia rate; see the Recognition entry."
+
+  "Recognition":
+    active_ingredients: ["trifloxysulfuron-sodium"]
+    category: herbicide
+    notes: "Syngenta; EPA Reg. 100-1658; alternate brand name Monument II. 20.4% trifloxysulfuron-sodium (0.204 lb ai/lb), water-dispersible granule. ALS inhibitor (Group 2) — same mode-of-action group as Sedgehammer's halosulfuron-methyl, so alternate chemistries for resistance management. Labeled post-emergent for established bermudagrass, zoysiagrass, buffalograss, St. Augustinegrass and kikuyugrass including residential lawns (except California). Controls listed broadleaf, sedge and grass weeds — Weed Group A includes yellow nutsedge, green kyllinga and globe sedge; Group B (suppression only) includes purple nutsedge, dallisgrass, bahiagrass and torpedograss. USE LIMITS: max 6.26 oz/A/year, max 1.95 oz/A per application, no more than 3 applications per year at the highest rate, and at least 28 days between retreatments. Tank mix with fluazifop-P-butyl (Fusilade II) is labeled for St. Augustinegrass and zoysiagrass to control bermudagrass and goosegrass — Zoysia rate is Recognition 1.95 oz/A (0.045 oz per 1000 sqft) plus Fusilade II 16-24 oz/A (0.37-0.55 oz per 1000 sqft), with 0.25-0.5% v/v non-ionic surfactant. Label warns: do NOT use the Recognition + Fusilade II mix for crabgrass (herbicide antagonism), and do NOT apply Recognition + triclopyr to zoysiagrass (unacceptable injury may occur) — the triclopyr mix for doveweed is St. Augustine only. The label contains no safener language; marketing copy referencing a metcamifen safener is not label-supported."
+
+  "Monument II":
+    active_ingredients: ["trifloxysulfuron-sodium"]
+    category: herbicide
+    notes: "Syngenta; alternate brand name for Recognition (EPA Reg. 100-1658) — same 20.4% trifloxysulfuron-sodium formulation. See the Recognition entry for rates, use limits and tank-mix restrictions."
+
   # --- Pre-emergent herbicides ---
   "Prodiamine":
     active_ingredients: ["prodiamine"]
