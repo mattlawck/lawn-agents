@@ -156,6 +156,30 @@ class KnowledgeConfig(BaseModel):
     source_tiers: SourceTiersConfig = Field(default_factory=SourceTiersConfig)
 
 
+class GroundingConfig(BaseModel):
+    """Claim-support validation (ADR 0010).
+
+    ADR 0003's schema layer only ever checked that a chemical item carried
+    a citation, never that the citation supported the claim. These knobs
+    control the post-synthesis check that closes that gap.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    snippet_overlap_threshold: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Fraction of a Citation.snippet's tokens that must appear in the "
+            "passage it quotes. Below 1.0 because synthesizer rule 5 permits a "
+            "tight paraphrase, and PDF extraction adds whitespace/hyphenation "
+            "noise that breaks literal matching for legitimate quotes."
+        ),
+    )
+
+
 class ResearchConfig(BaseModel):
     """Self-extending RAG (ADR 0005) configuration."""
 
@@ -214,6 +238,7 @@ class AppConfig(BaseModel):
     climate: ClimateConfig
     knowledge: KnowledgeConfig
     research: ResearchConfig
+    grounding: GroundingConfig = Field(default_factory=GroundingConfig)
     seed_urls: list[str] = Field(default_factory=list)
     chemicals_file: Path = Field(default=DEFAULT_CHEMICALS_PATH)
     weeds_file: Path = Field(default=DEFAULT_WEEDS_PATH)

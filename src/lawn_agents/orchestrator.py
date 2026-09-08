@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import ValidationError
 
+from lawn_agents import grounding
 from lawn_agents.agents import drought, knowledge, research, soiltemp, weather
 from lawn_agents.llm import build_chat_model, classify_llm_error, parse_router_intent
 from lawn_agents.logging import get_logger
@@ -41,7 +42,7 @@ from lawn_agents.models import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from lawn_agents.config import AppConfig, Settings, SourceTiersConfig
+    from lawn_agents.config import AppConfig, GroundingConfig, Settings, SourceTiersConfig
     from lawn_agents.llm import ChatModel
     from lawn_agents.models import DroughtSnapshot, Passage, SoilSnapshot, WeatherSnapshot
 
@@ -165,6 +166,7 @@ def answer(
         chemicals=settings.chemicals,
         weeds=settings.weeds,
         tiers=settings.app.knowledge.source_tiers,
+        grounding_config=settings.app.grounding,
         weed_matches=weed_matches,
         brand_matches=brand_matches,
         synthesizer=synthesizer_chat,
@@ -404,6 +406,7 @@ def _synthesize_with_guardrail(
     chemicals: ChemicalsConfig,
     weeds: WeedsConfig,
     tiers: SourceTiersConfig,
+    grounding_config: GroundingConfig,
     weed_matches: dict[str, WeedAlias] | None = None,
     brand_matches: dict[str, ChemicalBrand] | None = None,
     synthesizer: ChatModel,
@@ -426,12 +429,21 @@ def _synthesize_with_guardrail(
         question, intent, conditions, passages, tiers, brand_bridge, weed_bridge
     )
 
+    schema_retry_guidance = (
+        "Your previous response failed schema validation. Return JSON that "
+        "satisfies the Recommendation schema. Chemical-category CalendarItems "
+        "(fertilizer, micronutrient, herbicide, insecticide, fungicide) require "
+        "at least one Citation grounded in the provided <sources>. If you cannot "
+        "ground a chemical recommendation, set refused=true and refusal_reason."
+    )
+
     try:
-        return synthesizer.complete_structured(
+        draft = synthesizer.complete_structured(
             system=system, user=user_prompt, response_model=Recommendation
         )
     except ValidationError as exc:
         log.info("orchestrator.synthesizer_validation_failed", error=str(exc))
+        retry_guidance = schema_retry_guidance
     except Exception as exc:
         event_suffix, reason = classify_llm_error(exc)
         log.warning(
@@ -440,18 +452,23 @@ def _synthesize_with_guardrail(
             error_type=type(exc).__name__,
         )
         return _refusal(reason)
+    else:
+        # Schema-valid, but a citation being *present* is not the same as
+        # the citation *supporting* the claim — see ADR 0010.
+        failures = grounding.verify(draft, passages, chemicals, grounding_config)
+        if not failures:
+            return draft
+        log.info(
+            "orchestrator.grounding_failed",
+            count=len(failures),
+            kinds=sorted({f.kind for f in failures}),
+        )
+        retry_guidance = grounding.format_failures(failures)
 
-    # One re-prompt with the error inline so the model can self-correct.
-    retry_user = (
-        f"{user_prompt}\n\n---\n\n"
-        "Your previous response failed schema validation. Return JSON that "
-        "satisfies the Recommendation schema. Chemical-category CalendarItems "
-        "(fertilizer, micronutrient, herbicide, insecticide, fungicide) require "
-        "at least one Citation grounded in the provided <sources>. If you cannot "
-        "ground a chemical recommendation, set refused=true and refusal_reason."
-    )
+    # One re-prompt with the failure inline so the model can self-correct.
+    retry_user = f"{user_prompt}\n\n---\n\n{retry_guidance}"
     try:
-        return synthesizer.complete_structured(
+        retried = synthesizer.complete_structured(
             system=system, user=retry_user, response_model=Recommendation
         )
     except ValidationError as exc:
@@ -472,6 +489,24 @@ def _synthesize_with_guardrail(
             error_type=type(exc).__name__,
         )
         return _refusal(reason)
+
+    # The retry has to clear grounding too, or we refuse. Recommending an
+    # unsupported product is the exact failure ADR 0003 exists to prevent;
+    # a second unsupported draft is not evidence the third would be better.
+    retry_failures = grounding.verify(retried, passages, chemicals, grounding_config)
+    if retry_failures:
+        log.warning(
+            "orchestrator.grounding_final_failure",
+            count=len(retry_failures),
+            kinds=sorted({f.kind for f in retry_failures}),
+        )
+        return _refusal(
+            "The retrieved sources do not support the chemical recommendations "
+            "the model produced, twice in a row. Refusing rather than naming a "
+            "product the sources do not discuss. Check Clemson HGIC or your "
+            "local extension agent for this specific pest."
+        )
+    return retried
 
 
 def _synthesizer_user_prompt(
