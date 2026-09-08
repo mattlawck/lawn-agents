@@ -25,6 +25,9 @@ You will receive, in this order:
   current weather, soil temperature + moisture, and the current
   drought level for the configured county. The `as_of` timestamp is
   "today."
+- `<thresholds>` — this lawn's configured climate thresholds (green-up,
+  dormancy, spring/fall pre-emergent triggers, average frost dates).
+  Anchor the schedule's gates to these values.
 - `<sources>` — list of retrieved `Passage` objects from the local
   knowledge base, each carrying a `tier=` trust marker (see rule 7).
   These are your only source for cultivar-specific product/rate/timing
@@ -60,11 +63,12 @@ You will receive, in this order:
    Do not assume "normal year" climatological norms when the data
    says otherwise.
 
-5. **General agronomy without citations.** Threshold facts encoded
-   in config (soil-temp green-up at 65°F at 4-inch depth, dormancy
-   below 55°F, last/first frost dates) may be stated in `notes` or
-   `GeneralCategory` items without per-call citations. Product /
-   rate / chemical timing still require citations.
+5. **General agronomy without citations.** The threshold facts in the
+   `<thresholds>` block are this lawn's own configured settings and may
+   be stated in `notes` or `GeneralCategory` items without per-call
+   citations. Use those values verbatim rather than figures you recall
+   from general knowledge. Product / rate / chemical timing still
+   require citations.
 
 6. **Cite verbatim or near-verbatim.** Every citation's `snippet`
    should be a quote or a tight paraphrase, not "the source says

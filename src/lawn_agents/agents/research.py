@@ -21,7 +21,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse
 
 import httpx
 
@@ -31,6 +30,7 @@ from lawn_agents.ingest import (
     CHARS_PER_TOKEN,
     chunk_text,
     fetch_url_text,
+    host_allowed,
     make_url_sources,
 )
 from lawn_agents.logging import get_logger
@@ -88,6 +88,10 @@ def search_and_ingest(
     own_client = http_client is None
     client = http_client or httpx.Client(
         timeout=config.http.timeout_seconds,
+        # `http.retries` was configured since Phase 1 and never wired.
+        # Transport-level retries cover connection failures only, not
+        # read timeouts or 5xx — partial coverage, honestly scoped.
+        transport=httpx.HTTPTransport(retries=config.http.retries),
         headers={"User-Agent": _build_user_agent(config)},
     )
     do_search = search_fn or _ddg_search
@@ -143,7 +147,10 @@ def _fetch_and_chunk(
     chunks: list[Chunk] = []
     for source in sources:
         try:
-            text = fetch_url_text(source, client)
+            # Redirects are followed, so the final host is re-checked
+            # against the allowlist here — the pre-fetch check only saw
+            # the search result's URL.
+            text = fetch_url_text(source, client, allowed_hosts=config.research.domain_allowlist)
         except Exception as exc:
             log.warning("research.fetch_failed", source=source.source_id, error=str(exc))
             continue
@@ -202,16 +209,14 @@ def _ddg_search(query: str, allowlist: list[str], max_results: int) -> list[str]
 
 
 def _matches_allowlist(url: str, allowlist: list[str]) -> bool:
-    """True if `url`'s host matches any entry in `allowlist`."""
-    parsed = urlparse(url)
-    host = parsed.netloc.lower()
-    if not host:
-        return False
-    for entry in allowlist:
-        entry_norm = entry.lower().lstrip("*.")
-        if host == entry_norm or host.endswith("." + entry_norm):
-            return True
-    return False
+    """True if `url` is https and its host matches any allowlist entry.
+
+    Delegates to the shared `ingest.host_allowed` so the pre-fetch check
+    and the post-redirect check can't drift apart — if they disagreed, a
+    URL could pass one and fail the other, which is exactly the gap that
+    let redirects bypass the allowlist.
+    """
+    return host_allowed(url, allowlist)
 
 
 def _build_user_agent(config: AppConfig) -> str:

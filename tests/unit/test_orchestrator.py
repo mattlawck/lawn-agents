@@ -529,6 +529,50 @@ class TestResearchInvocation:
         assert result.refused is False
 
 
+class TestConfiguredThresholdsReachThePrompt:
+    """`climate:` settings were dead config until 2026-09-08.
+
+    Both prompts asserted "threshold facts encoded in config (soil-temp
+    green-up at 65F, dormancy below 55F...)" while hardcoding those
+    numbers in the prompt text. Nothing read `AppConfig.climate`, so
+    editing the config changed nothing and the model was told the values
+    had a provenance they did not have. That matters for the calendar
+    work, where soil-temp gates are the whole mechanism.
+    """
+
+    def test_block_uses_config_values_not_defaults(self, settings: Settings) -> None:
+        climate = settings.app.climate.model_copy(
+            update={"green_up_soil_temp_f": 71, "preemergent_fall_soil_temp_f": 68}
+        )
+        block = orchestrator.thresholds_block(climate)
+        assert "71F" in block
+        assert "68F" in block
+
+    def test_thresholds_reach_the_synthesizer_prompt(self, settings: Settings) -> None:
+        rec = _good_recommendation()
+        synth = FakeChatModel(structured_responses=[rec])
+        settings = settings.model_copy(
+            update={
+                "app": settings.app.model_copy(
+                    update={
+                        "climate": settings.app.climate.model_copy(
+                            update={"preemergent_fall_soil_temp_f": 68}
+                        )
+                    }
+                )
+            }
+        )
+        orchestrator.answer(
+            "When is fall pre-emergent?",
+            settings,
+            **_injectables(router=FakeChatModel(text_response="ad-hoc"), synthesizer=synth),
+        )
+        _, prompt = synth.structured_calls[0]
+        assert "<thresholds>" in prompt
+        # The user's edited value, not the 70F that used to be hardcoded.
+        assert "68F" in prompt
+
+
 class TestBridgeLexicalTerms:
     """Both bridges must feed `is_weak`'s lexical-overlap check.
 
