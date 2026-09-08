@@ -137,7 +137,56 @@ def fetch_pdf_pages(source: IngestSource) -> list[tuple[int, str]]:
     return pages
 
 
-def fetch_pdf_url_pages(source: IngestSource, client: httpx.Client) -> list[tuple[int, str]]:
+class RedirectedOffAllowlistError(RuntimeError):
+    """A fetch followed a redirect to a host outside the allowlist.
+
+    The research subagent (ADR 0005) validates a search result's host
+    before fetching, but redirects are followed after that check. Without
+    re-validating the final URL, an allowlisted host that redirects
+    elsewhere would have its content ingested and stored under the
+    *original* allowlisted `source_id` — which ADR 0009 would then tier
+    as `extension` and ADR 0010's grounding would treat as authoritative.
+
+    Seed URLs are exempt: those are curated by the user by hand, so they
+    pass `allowed_hosts=None` and redirect freely.
+    """
+
+
+def _guard_redirect(response: httpx.Response, allowed_hosts: list[str] | None) -> None:
+    """Re-check the *final* URL's host after redirects were followed."""
+    if allowed_hosts is None:
+        return
+    final = str(response.url)
+    if _host_allowed(final, allowed_hosts):
+        return
+    msg = f"redirected to a host outside the allowlist: {final}"
+    raise RedirectedOffAllowlistError(msg)
+
+
+def _host_allowed(url: str, allowlist: list[str]) -> bool:
+    """True if `url` is https and its hostname matches the allowlist.
+
+    Uses `hostname` rather than `netloc` so userinfo and ports can't
+    distort the comparison, and requires https so a matched host can't
+    be fetched over a downgraded or non-web scheme.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        return False
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+    return any(
+        host == entry.lower().lstrip("*.") or host.endswith("." + entry.lower().lstrip("*."))
+        for entry in allowlist
+    )
+
+
+def fetch_pdf_url_pages(
+    source: IngestSource,
+    client: httpx.Client,
+    allowed_hosts: list[str] | None = None,
+) -> list[tuple[int, str]]:
     """Download a PDF over HTTP and extract pages via pypdf.
 
     Mirrors `fetch_pdf_pages` but reads from an `httpx`-fetched byte
@@ -151,6 +200,7 @@ def fetch_pdf_url_pages(source: IngestSource, client: httpx.Client) -> list[tupl
 
     response = client.get(source.location, follow_redirects=True)
     response.raise_for_status()
+    _guard_redirect(response, allowed_hosts)
     reader = PdfReader(BytesIO(response.content))
     pages: list[tuple[int, str]] = []
     for idx, page in enumerate(reader.pages, start=1):
@@ -170,7 +220,11 @@ def fetch_pdf_url_pages(source: IngestSource, client: httpx.Client) -> list[tupl
     return pages
 
 
-def fetch_url_text(source: IngestSource, client: httpx.Client) -> str:
+def fetch_url_text(
+    source: IngestSource,
+    client: httpx.Client,
+    allowed_hosts: list[str] | None = None,
+) -> str:
     r"""Fetch a URL and return its main content as markdown (trafilatura).
 
     We request `output_format="markdown"` because the default plain-text
@@ -184,6 +238,7 @@ def fetch_url_text(source: IngestSource, client: httpx.Client) -> str:
 
     response = client.get(source.location, follow_redirects=True)
     response.raise_for_status()
+    _guard_redirect(response, allowed_hosts)
     extracted = trafilatura.extract(
         response.text,
         url=source.location,
