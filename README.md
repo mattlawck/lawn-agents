@@ -9,8 +9,10 @@ every chemical recommendation.
 
 > **Safety rule.** This system never guesses on herbicide, fertilizer, or
 > insecticide products. Every chemical recommendation must cite an
-> authoritative passage from the retrieved knowledge base. If no source is
-> found, it refuses and tells you where to look instead.
+> authoritative passage from the retrieved knowledge base — and that
+> citation must actually *support* the claim, not merely accompany it
+> ([ADR 0010](docs/adr/0010-claim-support-validation.md)). If no source
+> is found, it refuses and tells you where to look instead.
 
 ## Status
 
@@ -112,9 +114,14 @@ If retrieval comes back weak on a question, the orchestrator can dispatch a
 **research subagent** restricted to a domain allowlist (`config.yaml >
 research.domain_allowlist`, defaults to `.edu`, `.gov`, and named
 turf-industry sites). Found pages are chunked, embedded, and stored with
-`requires_review: true` until you promote them via
-`lawn-agents review-additions`. The RAG grows monotonically — your second
-run is smarter than your first.
+`requires_review: true`. The RAG grows monotonically — your second run is
+smarter than your first.
+
+> **Not yet implemented:** `--review-additions` is currently a stub. Auto
+> ingested passages are stored and flagged, and the synthesizer labels
+> them `[unreviewed]` in its `<sources>` block so the human-in-the-loop
+> is preserved at the point of use — but there is no promote/reject UI
+> yet. Until there is, unreviewed passages accumulate in the index.
 
 ## Configuration
 

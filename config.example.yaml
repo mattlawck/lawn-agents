@@ -121,6 +121,24 @@ knowledge:
       # tier correctly — they have no URL to match on. For example:
       # - "Warm Season E-Guide"
 
+# Claim-support validation (ADR 0010). Runs after synthesis, before the
+# answer is rendered. ADR 0003's schema check only ever verified that a
+# chemical recommendation *carried* a citation; these checks verify the
+# citation actually supports it — the cited source was really in
+# <sources>, the quoted snippet appears in it, and any product or active
+# ingredient named in the action shows up in a cited passage.
+#
+# Deterministic: no LLM, no tokens, no added latency. A guardrail built
+# to catch model error shouldn't itself be a model that can hallucinate.
+grounding:
+  enabled: true
+  # Fraction of a Citation.snippet's tokens that must appear in the
+  # passage it quotes. Below 1.0 on purpose: synthesizer rule 5 permits
+  # a tight paraphrase, and PDF text extraction introduces whitespace
+  # and hyphenation noise that would break literal matching even for
+  # honest quotes. Raise toward 1.0 to demand near-verbatim quoting.
+  snippet_overlap_threshold: 0.6
+
 research:
   # Self-extending RAG. When knowledge.py returns weak results the
   # orchestrator may dispatch a research subagent constrained to this
