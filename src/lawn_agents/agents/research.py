@@ -28,9 +28,9 @@ from lawn_agents.agents import knowledge
 from lawn_agents.agents.knowledge import Chunk
 from lawn_agents.ingest import (
     CHARS_PER_TOKEN,
-    _host_allowed,
     chunk_text,
     fetch_url_text,
+    host_allowed,
     make_url_sources,
 )
 from lawn_agents.logging import get_logger
@@ -211,12 +211,12 @@ def _ddg_search(query: str, allowlist: list[str], max_results: int) -> list[str]
 def _matches_allowlist(url: str, allowlist: list[str]) -> bool:
     """True if `url` is https and its host matches any allowlist entry.
 
-    Delegates to the shared `ingest._host_allowed` so the pre-fetch check
+    Delegates to the shared `ingest.host_allowed` so the pre-fetch check
     and the post-redirect check can't drift apart — if they disagreed, a
     URL could pass one and fail the other, which is exactly the gap that
     let redirects bypass the allowlist.
     """
-    return _host_allowed(url, allowlist)
+    return host_allowed(url, allowlist)
 
 
 def _build_user_agent(config: AppConfig) -> str:

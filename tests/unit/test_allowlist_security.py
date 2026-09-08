@@ -16,8 +16,8 @@ from lawn_agents.agents.research import _matches_allowlist
 from lawn_agents.ingest import (
     IngestSource,
     RedirectedOffAllowlistError,
-    _host_allowed,
     fetch_url_text,
+    host_allowed,
 )
 
 ALLOWLIST = ["hgic.clemson.edu", "content.ces.ncsu.edu"]
@@ -34,7 +34,7 @@ class TestHostMatching:
         ],
     )
     def test_allowed(self, url: str) -> None:
-        assert _host_allowed(url, ALLOWLIST) is True
+        assert host_allowed(url, ALLOWLIST) is True
 
     @pytest.mark.parametrize(
         ("url", "why"),
@@ -49,7 +49,7 @@ class TestHostMatching:
         ],
     )
     def test_rejected(self, url: str, why: str) -> None:
-        assert _host_allowed(url, ALLOWLIST) is False, why
+        assert host_allowed(url, ALLOWLIST) is False, why
 
     def test_userinfo_cannot_smuggle_a_host(self) -> None:
         """`netloc` includes userinfo; `hostname` does not.
@@ -57,16 +57,16 @@ class TestHostMatching:
         The old check compared against `netloc`, so credentials in the
         URL became part of the string being matched.
         """
-        assert _host_allowed("https://hgic.clemson.edu@evil.example/x", ALLOWLIST) is False
+        assert host_allowed("https://hgic.clemson.edu@evil.example/x", ALLOWLIST) is False
 
     def test_port_does_not_break_a_legitimate_match(self) -> None:
         """The old netloc check rejected allowed hosts carrying a port."""
-        assert _host_allowed("https://hgic.clemson.edu:8443/x", ALLOWLIST) is True
+        assert host_allowed("https://hgic.clemson.edu:8443/x", ALLOWLIST) is True
 
     def test_research_prefilter_uses_the_same_rule(self) -> None:
         """Pre-fetch and post-redirect checks must not drift apart."""
         for url in ("https://hgic.clemson.edu/x", "https://evil.example/x"):
-            assert _matches_allowlist(url, ALLOWLIST) == _host_allowed(url, ALLOWLIST)
+            assert _matches_allowlist(url, ALLOWLIST) == host_allowed(url, ALLOWLIST)
 
 
 class TestRedirectGuard:

@@ -23,11 +23,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import ValidationError
-
-from lawn_agents import grounding
+from lawn_agents import synthesis
 from lawn_agents.agents import drought, knowledge, soiltemp, weather
-from lawn_agents.llm import build_chat_model, classify_llm_error
+from lawn_agents.llm import build_chat_model
 from lawn_agents.logging import get_logger
 from lawn_agents.models import Recommendation
 from lawn_agents.orchestrator import (
@@ -216,86 +214,38 @@ def _synthesize_plan_with_guardrail(
     weed_matches: dict[str, WeedAlias] | None = None,
     synthesizer: ChatModel,
 ) -> Recommendation:
-    system = _load_prompt("planner.md")
-    brand_bridge = _brand_bridge_text(detect_brands_in_question(target, chemicals))
     weed_matches = (
         weed_matches if weed_matches is not None else detect_weeds_in_question(target, weeds)
     )
-    weed_bridge = _weed_bridge_text(weed_matches)
     user_prompt = _planner_user_prompt(
-        scope, target, conditions, passages, tiers, climate, brand_bridge, weed_bridge
+        scope,
+        target,
+        conditions,
+        passages,
+        tiers,
+        climate,
+        _brand_bridge_text(detect_brands_in_question(target, chemicals)),
+        _weed_bridge_text(weed_matches),
     )
-
-    schema_retry_guidance = (
-        "Your previous response failed schema validation. Return JSON that "
-        "satisfies the Recommendation schema. Chemical-category CalendarItems "
-        "(fertilizer, micronutrient, herbicide, insecticide, fungicide) require "
-        "at least one Citation grounded in <sources>. If you cannot ground a "
-        "chemical recommendation, set refused=true and refusal_reason."
-    )
-
-    try:
-        draft = synthesizer.complete_structured(
-            system=system, user=user_prompt, response_model=Recommendation
-        )
-    except ValidationError as exc:
-        log.info("planner.synthesizer_validation_failed", error=str(exc))
-        retry_guidance = schema_retry_guidance
-    except Exception as exc:
-        event_suffix, reason = classify_llm_error(exc)
-        log.warning(
-            f"planner.synthesizer_{event_suffix}",
-            error=str(exc),
-            error_type=type(exc).__name__,
-        )
-        return _refusal(reason)
-    else:
-        # A year-long plan names more products than any single answer, so
-        # the claim-support check (ADR 0010) matters more here, not less.
-        failures = grounding.verify(draft, passages, chemicals, grounding_config)
-        if not failures:
-            return draft
-        log.info(
-            "planner.grounding_failed",
-            count=len(failures),
-            kinds=sorted({f.kind for f in failures}),
-        )
-        retry_guidance = grounding.format_failures(failures)
-
-    retry_user = f"{user_prompt}\n\n---\n\n{retry_guidance}"
-    try:
-        retried = synthesizer.complete_structured(
-            system=system, user=retry_user, response_model=Recommendation
-        )
-    except ValidationError as exc:
-        log.warning("planner.synthesizer_final_validation_failure", error=str(exc))
-        return _refusal(
+    return synthesis.synthesize_with_guardrails(
+        system=_load_prompt("planner.md"),
+        user_prompt=user_prompt,
+        passages=passages,
+        chemicals=chemicals,
+        grounding_config=grounding_config,
+        synthesizer=synthesizer,
+        log_prefix="planner",
+        refusal=_refusal,
+        schema_failure_reason=(
             "planner output failed schema validation twice; refusing rather than "
             "fabricating a recommendation"
-        )
-    except Exception as exc:
-        # See matching note in orchestrator._synthesize_with_guardrail.
-        event_suffix, reason = classify_llm_error(exc)
-        log.warning(
-            f"planner.synthesizer_retry_{event_suffix}",
-            error=str(exc),
-            error_type=type(exc).__name__,
-        )
-        return _refusal(reason)
-
-    retry_failures = grounding.verify(retried, passages, chemicals, grounding_config)
-    if retry_failures:
-        log.warning(
-            "planner.grounding_final_failure",
-            count=len(retry_failures),
-            kinds=sorted({f.kind for f in retry_failures}),
-        )
-        return _refusal(
+        ),
+        grounding_failure_reason=(
             "The retrieved sources do not support the chemical recommendations "
             "in this plan, twice in a row. Refusing rather than scheduling a "
             "product the sources do not discuss."
-        )
-    return retried
+        ),
+    )
 
 
 def _planner_user_prompt(

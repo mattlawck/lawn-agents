@@ -157,13 +157,13 @@ def _guard_redirect(response: httpx.Response, allowed_hosts: list[str] | None) -
     if allowed_hosts is None:
         return
     final = str(response.url)
-    if _host_allowed(final, allowed_hosts):
+    if host_allowed(final, allowed_hosts):
         return
     msg = f"redirected to a host outside the allowlist: {final}"
     raise RedirectedOffAllowlistError(msg)
 
 
-def _host_allowed(url: str, allowlist: list[str]) -> bool:
+def host_allowed(url: str, allowlist: list[str]) -> bool:
     """True if `url` is https and its hostname matches the allowlist.
 
     Uses `hostname` rather than `netloc` so userinfo and ports can't
