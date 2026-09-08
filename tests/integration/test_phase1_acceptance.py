@@ -293,7 +293,14 @@ class TestDrought2026Scenario:
         rec = planner.plan_year(
             2026,
             settings,
-            **_planner_injectables(synthesizer=synth),
+            # The half-rate citation quotes the Clemson drought passage, so
+            # that passage has to be in <sources> — otherwise grounding
+            # (ADR 0010) correctly refuses a claim cited to a source the
+            # model was never shown.
+            **_planner_injectables(
+                synthesizer=synth,
+                passages=[_zeon_drought_advice_passage(), _zeon_calendar_passage()],
+            ),
         )
         assert rec.refused is False
         first = rec.monthly_actions[0]

@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import ValidationError
 
+from lawn_agents import grounding
 from lawn_agents.agents import drought, knowledge, soiltemp, weather
 from lawn_agents.llm import build_chat_model, classify_llm_error
 from lawn_agents.logging import get_logger
@@ -42,7 +43,7 @@ from lawn_agents.orchestrator import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from lawn_agents.config import AppConfig, Settings, SourceTiersConfig
+    from lawn_agents.config import AppConfig, GroundingConfig, Settings, SourceTiersConfig
     from lawn_agents.llm import ChatModel
     from lawn_agents.models import (
         ChemicalsConfig,
@@ -174,6 +175,7 @@ def _plan(
         chemicals=settings.chemicals,
         weeds=settings.weeds,
         tiers=settings.app.knowledge.source_tiers,
+        grounding_config=settings.app.grounding,
         weed_matches=weed_matches,
         synthesizer=synth_chat,
     )
@@ -201,6 +203,7 @@ def _synthesize_plan_with_guardrail(
     chemicals: ChemicalsConfig,
     weeds: WeedsConfig,
     tiers: SourceTiersConfig,
+    grounding_config: GroundingConfig,
     weed_matches: dict[str, WeedAlias] | None = None,
     synthesizer: ChatModel,
 ) -> Recommendation:
@@ -214,12 +217,21 @@ def _synthesize_plan_with_guardrail(
         scope, target, conditions, passages, tiers, brand_bridge, weed_bridge
     )
 
+    schema_retry_guidance = (
+        "Your previous response failed schema validation. Return JSON that "
+        "satisfies the Recommendation schema. Chemical-category CalendarItems "
+        "(fertilizer, micronutrient, herbicide, insecticide, fungicide) require "
+        "at least one Citation grounded in <sources>. If you cannot ground a "
+        "chemical recommendation, set refused=true and refusal_reason."
+    )
+
     try:
-        return synthesizer.complete_structured(
+        draft = synthesizer.complete_structured(
             system=system, user=user_prompt, response_model=Recommendation
         )
     except ValidationError as exc:
         log.info("planner.synthesizer_validation_failed", error=str(exc))
+        retry_guidance = schema_retry_guidance
     except Exception as exc:
         event_suffix, reason = classify_llm_error(exc)
         log.warning(
@@ -228,17 +240,22 @@ def _synthesize_plan_with_guardrail(
             error_type=type(exc).__name__,
         )
         return _refusal(reason)
+    else:
+        # A year-long plan names more products than any single answer, so
+        # the claim-support check (ADR 0010) matters more here, not less.
+        failures = grounding.verify(draft, passages, chemicals, grounding_config)
+        if not failures:
+            return draft
+        log.info(
+            "planner.grounding_failed",
+            count=len(failures),
+            kinds=sorted({f.kind for f in failures}),
+        )
+        retry_guidance = grounding.format_failures(failures)
 
-    retry_user = (
-        f"{user_prompt}\n\n---\n\n"
-        "Your previous response failed schema validation. Return JSON that "
-        "satisfies the Recommendation schema. Chemical-category CalendarItems "
-        "(fertilizer, micronutrient, herbicide, insecticide, fungicide) require "
-        "at least one Citation grounded in <sources>. If you cannot ground a "
-        "chemical recommendation, set refused=true and refusal_reason."
-    )
+    retry_user = f"{user_prompt}\n\n---\n\n{retry_guidance}"
     try:
-        return synthesizer.complete_structured(
+        retried = synthesizer.complete_structured(
             system=system, user=retry_user, response_model=Recommendation
         )
     except ValidationError as exc:
@@ -256,6 +273,20 @@ def _synthesize_plan_with_guardrail(
             error_type=type(exc).__name__,
         )
         return _refusal(reason)
+
+    retry_failures = grounding.verify(retried, passages, chemicals, grounding_config)
+    if retry_failures:
+        log.warning(
+            "planner.grounding_final_failure",
+            count=len(retry_failures),
+            kinds=sorted({f.kind for f in retry_failures}),
+        )
+        return _refusal(
+            "The retrieved sources do not support the chemical recommendations "
+            "in this plan, twice in a row. Refusing rather than scheduling a "
+            "product the sources do not discuss."
+        )
+    return retried
 
 
 def _planner_user_prompt(

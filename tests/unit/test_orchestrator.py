@@ -125,7 +125,17 @@ def _drought_snapshot(d_level: int = 3) -> DroughtSnapshot:
     )
 
 
-def _passage(*, content: str = "Apply pre-emergent at 55F.") -> Passage:
+# The default passage must actually contain the text `_good_recommendation`
+# quotes. Before ADR 0010 nothing checked the relationship, so the fixtures
+# cited a snippet that appeared nowhere in the passage — which is precisely
+# the defect the grounding check was added to catch.
+_PASSAGE_TEXT = (
+    "Apply pre-emergent when 4-inch soil temp hits 55F. "
+    "Zoysiagrass greens up as soil temperatures approach 65F."
+)
+
+
+def _passage(*, content: str = _PASSAGE_TEXT) -> Passage:
     return Passage(
         content=content,
         score=0.82,
@@ -336,8 +346,18 @@ class TestAnswerDegradesOnFetchFailures:
         assert result.refused is False
 
     def test_retrieve_exception_yields_empty_sources(self, settings: Settings) -> None:
+        """A dead index degrades to an empty <sources> block, then refuses.
+
+        The prompt still renders (the pipeline doesn't crash), but a model
+        that returns a cited chemical recommendation anyway is citing a
+        source it was never given. Grounding (ADR 0010) catches that and
+        refuses rather than passing it through — which is the behavior
+        ADR 0003 always described and the schema check alone never
+        delivered.
+        """
         rec = _good_recommendation()
-        synth = FakeChatModel(structured_responses=[rec])
+        # Two responses: the model repeats its ungrounded answer on retry.
+        synth = FakeChatModel(structured_responses=[rec, rec])
 
         def boom(_q: str, _c: Any) -> list[Passage]:
             raise RuntimeError("index corrupt")
@@ -354,9 +374,10 @@ class TestAnswerDegradesOnFetchFailures:
             # Empty research result keeps DDGS out of the unit test.
             research_fn=lambda _q, _c: [],
         )
-        assert result.refused is False
         _, prompt = synth.structured_calls[0]
         assert "no relevant passages retrieved" in prompt
+        assert result.refused is True
+        assert "do not support" in (result.refusal_reason or "")
 
     def test_drought_snapshot_reaches_prompt(self, settings: Settings) -> None:
         rec = _good_recommendation()
@@ -395,12 +416,14 @@ class TestResearchInvocation:
     """ADR 0005 — research subagent fires only on weak retrieval."""
 
     def _weak_passage(self) -> Passage:
-        # Below the example config's weak_score_threshold (0.55).
+        # Below the example config's weak_score_threshold (0.55). Carries
+        # the citation's source_id and quoted text so grounding (ADR 0010)
+        # passes — these tests are about the research path, not grounding.
         return Passage(
-            content="vague-ish content",
+            content=_PASSAGE_TEXT,
             score=0.30,
-            source_id="weak",
-            source_title="Weak",
+            source_id="hgic-1207",
+            source_title="Clemson HGIC 1207",
         )
 
     def _researched_passage(self) -> Passage:
