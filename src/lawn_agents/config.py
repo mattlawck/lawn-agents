@@ -69,8 +69,10 @@ class RetrievalConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    top_k_vector: int = 8
-    top_k_bm25: int = 4
+    # `top_k_vector` / `top_k_bm25` lived here since Phase 1 describing a
+    # hybrid retriever that was never built — knowledge.py is pure vector.
+    # Removed rather than left as config that advertises a capability the
+    # code doesn't have. They come back with the implementation.
     rerank_top_k: int = 5
     # Tiered relevance check (PR-tba):
     #   score < weak    → weak (research subagent fires)

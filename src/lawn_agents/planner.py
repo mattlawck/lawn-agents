@@ -38,12 +38,19 @@ from lawn_agents.orchestrator import (
     detect_brands_in_question,
     detect_weeds_in_question,
     expand_query_with_weed_aliases,
+    thresholds_block,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from lawn_agents.config import AppConfig, GroundingConfig, Settings, SourceTiersConfig
+    from lawn_agents.config import (
+        AppConfig,
+        ClimateConfig,
+        GroundingConfig,
+        Settings,
+        SourceTiersConfig,
+    )
     from lawn_agents.llm import ChatModel
     from lawn_agents.models import (
         ChemicalsConfig,
@@ -175,6 +182,7 @@ def _plan(
         chemicals=settings.chemicals,
         weeds=settings.weeds,
         tiers=settings.app.knowledge.source_tiers,
+        climate=settings.app.climate,
         grounding_config=settings.app.grounding,
         weed_matches=weed_matches,
         synthesizer=synth_chat,
@@ -203,6 +211,7 @@ def _synthesize_plan_with_guardrail(
     chemicals: ChemicalsConfig,
     weeds: WeedsConfig,
     tiers: SourceTiersConfig,
+    climate: ClimateConfig,
     grounding_config: GroundingConfig,
     weed_matches: dict[str, WeedAlias] | None = None,
     synthesizer: ChatModel,
@@ -214,7 +223,7 @@ def _synthesize_plan_with_guardrail(
     )
     weed_bridge = _weed_bridge_text(weed_matches)
     user_prompt = _planner_user_prompt(
-        scope, target, conditions, passages, tiers, brand_bridge, weed_bridge
+        scope, target, conditions, passages, tiers, climate, brand_bridge, weed_bridge
     )
 
     schema_retry_guidance = (
@@ -295,6 +304,7 @@ def _planner_user_prompt(
     conditions: Conditions,
     passages: list[Passage],
     tiers: SourceTiersConfig,
+    climate: ClimateConfig,
     brand_bridge: str = "",
     weed_bridge: str = "",
 ) -> str:
@@ -305,6 +315,7 @@ def _planner_user_prompt(
         f"<today>{now}</today>\n\n"
         f'<plan_target scope="{scope}">{target}</plan_target>{bridge_block}\n\n'
         f"<conditions>\n{conditions.model_dump_json(indent=2)}\n</conditions>\n\n"
+        f"{thresholds_block(climate)}\n\n"
         f"<sources>\n{knowledge.format_sources(passages, tiers)}\n</sources>"
     )
 

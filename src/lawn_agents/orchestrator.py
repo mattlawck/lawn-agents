@@ -42,7 +42,13 @@ from lawn_agents.models import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from lawn_agents.config import AppConfig, GroundingConfig, Settings, SourceTiersConfig
+    from lawn_agents.config import (
+        AppConfig,
+        ClimateConfig,
+        GroundingConfig,
+        Settings,
+        SourceTiersConfig,
+    )
     from lawn_agents.llm import ChatModel
     from lawn_agents.models import DroughtSnapshot, Passage, SoilSnapshot, WeatherSnapshot
 
@@ -166,6 +172,7 @@ def answer(
         chemicals=settings.chemicals,
         weeds=settings.weeds,
         tiers=settings.app.knowledge.source_tiers,
+        climate=settings.app.climate,
         grounding_config=settings.app.grounding,
         weed_matches=weed_matches,
         brand_matches=brand_matches,
@@ -406,6 +413,7 @@ def _synthesize_with_guardrail(
     chemicals: ChemicalsConfig,
     weeds: WeedsConfig,
     tiers: SourceTiersConfig,
+    climate: ClimateConfig,
     grounding_config: GroundingConfig,
     weed_matches: dict[str, WeedAlias] | None = None,
     brand_matches: dict[str, ChemicalBrand] | None = None,
@@ -426,7 +434,7 @@ def _synthesize_with_guardrail(
     )
     weed_bridge = _weed_bridge_text(weed_matches)
     user_prompt = _synthesizer_user_prompt(
-        question, intent, conditions, passages, tiers, brand_bridge, weed_bridge
+        question, intent, conditions, passages, tiers, climate, brand_bridge, weed_bridge
     )
 
     schema_retry_guidance = (
@@ -509,12 +517,47 @@ def _synthesize_with_guardrail(
     return retried
 
 
+def thresholds_block(climate: ClimateConfig) -> str:
+    """Render the user's configured climate thresholds for the prompt.
+
+    These values have lived in `config.yaml` since Phase 1 and were never
+    read by any code. Both prompts asserted "threshold facts encoded in
+    config (soil-temp green-up at 65F...)" while hardcoding those numbers
+    in the prompt text — so editing the config changed nothing, and the
+    model was told the values had a provenance they did not have.
+
+    Injecting them makes the config load-bearing and lets the same prompt
+    serve a different climate without an edit.
+    """
+    return "\n".join(
+        (
+            "<thresholds>",
+            "The user's configured local thresholds. Prefer these over any",
+            "general figures you may recall; they are this lawn's settings.",
+            f"- Green-up (4-inch soil temp): {climate.green_up_soil_temp_f}F",
+            f"- Dormancy onset (4-inch soil temp): {climate.dormancy_soil_temp_f}F",
+            (
+                "- Spring pre-emergent trigger (4-inch soil temp rising through): "
+                f"{climate.preemergent_spring_soil_temp_f}F"
+            ),
+            (
+                "- Fall pre-emergent trigger (4-inch soil temp falling through): "
+                f"{climate.preemergent_fall_soil_temp_f}F"
+            ),
+            f"- Average last spring frost: {climate.last_frost.isoformat()}",
+            f"- Average first fall frost: {climate.first_frost.isoformat()}",
+            "</thresholds>",
+        )
+    )
+
+
 def _synthesizer_user_prompt(
     question: str,
     intent: Intent,
     conditions: Conditions,
     passages: list[Passage],
     tiers: SourceTiersConfig,
+    climate: ClimateConfig,
     brand_bridge: str = "",
     weed_bridge: str = "",
 ) -> str:
@@ -523,6 +566,7 @@ def _synthesizer_user_prompt(
     return (
         f"<intent>{intent}</intent>\n\n"
         f"<conditions>\n{conditions.model_dump_json(indent=2)}\n</conditions>\n\n"
+        f"{thresholds_block(climate)}\n\n"
         f"<question>{question}</question>{bridge_block}\n\n"
         f"<sources>\n{knowledge.format_sources(passages, tiers)}\n</sources>"
     )

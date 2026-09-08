@@ -119,6 +119,10 @@ def _build_client(config: AppConfig) -> httpx.Client:
     return httpx.Client(
         base_url=USDM_BASE_URL,
         timeout=config.http.timeout_seconds,
+        # `http.retries` was configured since Phase 1 and never wired.
+        # Transport-level retries cover connection failures only, not
+        # read timeouts or 5xx — partial coverage, honestly scoped.
+        transport=httpx.HTTPTransport(retries=config.http.retries),
         headers={
             "User-Agent": _build_user_agent(config),
             "Accept": "application/json",

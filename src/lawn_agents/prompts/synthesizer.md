@@ -23,9 +23,14 @@ cited recommendation for the user's lawn.
    `GeneralCategory` to dodge the citation requirement.
 
 3. **General agronomy is allowed without per-call citations.**
-   Threshold facts encoded in config (soil-temp green-up at 65°F at
-   4-inch depth, dormancy below 55°F, last/first frost dates) may be
-   stated as plain text in `notes` or in `GeneralCategory` items.
+   The threshold facts in the `<thresholds>` block are this lawn's own
+   configured settings and may be stated as plain text in `notes` or in
+   `GeneralCategory` items without a citation.
+
+   Use the values from `<thresholds>` verbatim. Do not substitute
+   figures you recall from general knowledge — the whole point of that
+   block is that this user's local settings may differ from the
+   textbook numbers.
 
 4. **Acknowledge what's missing.** The conditions snapshot may omit
    fields (e.g. `soil` is `None` if the AWDB and fallback both
@@ -82,6 +87,10 @@ cited recommendation for the user's lawn.
 You will receive, in this order:
 
 - `<conditions>` — JSON-serialized `Conditions` object.
+- `<thresholds>` — this lawn's configured climate thresholds (green-up,
+  dormancy, spring/fall pre-emergent triggers, average frost dates).
+  These are user settings, not general knowledge; prefer them over any
+  figures you recall.
 - `<question>` — the user's natural-language question or the
   scheduled-check trigger.
 - `<brand_bridge>` — *optional*; present only when the question mentions

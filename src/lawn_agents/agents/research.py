@@ -88,6 +88,10 @@ def search_and_ingest(
     own_client = http_client is None
     client = http_client or httpx.Client(
         timeout=config.http.timeout_seconds,
+        # `http.retries` was configured since Phase 1 and never wired.
+        # Transport-level retries cover connection failures only, not
+        # read timeouts or 5xx — partial coverage, honestly scoped.
+        transport=httpx.HTTPTransport(retries=config.http.retries),
         headers={"User-Agent": _build_user_agent(config)},
     )
     do_search = search_fn or _ddg_search

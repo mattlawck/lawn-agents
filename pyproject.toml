@@ -42,7 +42,6 @@ dependencies = [
     # pydantic-settings already; declared here to make the dep explicit.
     "python-dotenv>=1.0",
     "httpx>=0.28",
-    "tenacity>=9.0",
     "pyyaml>=6.0",
     "structlog>=24.4",
     "rich>=13.9",

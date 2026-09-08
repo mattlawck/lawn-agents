@@ -56,8 +56,6 @@ knowledge:
   chunk_size_tokens: 700
   chunk_overlap_tokens: 100
   retrieval:
-    top_k_vector: 8
-    top_k_bm25: 4
     rerank_top_k: 5
     # If best reranked score is below this floor, knowledge.py signals
     # "weak result" and the orchestrator may invoke the research subagent.
