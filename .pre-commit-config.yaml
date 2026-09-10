@@ -15,10 +15,17 @@ repos:
       - id: check-added-large-files
         args: ["--maxkb=500"]
 
+  # MUST stay in step with the `ruff` pin in pyproject.toml. When these
+  # drift, the hook formats with one version and CI checks with another,
+  # so pre-commit "fixing" a file is what breaks the build. That is not
+  # hypothetical: this pin sat at v0.8.4 while the venv resolved 0.15.14,
+  # and a hook-reformatted test file failed CI on all three Python
+  # versions. Dependabot now watches this file too.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.4
+    rev: v0.15.14
     hooks:
-      - id: ruff
+      # `ruff` is a legacy alias for `ruff-check` as of 0.15.
+      - id: ruff-check
         args: [--fix]
       - id: ruff-format
 

@@ -16,11 +16,12 @@ import yaml
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from lawn_agents.models import ChemicalsConfig, WeedsConfig
+from lawn_agents.models import ChemicalsConfig, ProgramConfig, WeedsConfig
 
 DEFAULT_CONFIG_PATH = Path("config.yaml")
 DEFAULT_CHEMICALS_PATH = Path("data/chemicals.yaml")
 DEFAULT_WEEDS_PATH = Path("data/weeds.yaml")
+DEFAULT_PROGRAM_PATH = Path("data/calendar.yaml")
 
 Provider = Literal["gemini", "anthropic"]
 
@@ -37,6 +38,17 @@ class LocationConfig(BaseModel):
     latitude: float
     longitude: float
     coastal: bool = False
+    scan_station_triplet: str | None = Field(
+        default=None,
+        description=(
+            "Pin the USDA-NRCS SCAN station, e.g. '2038:SC:SCAN'. When set, "
+            "soiltemp skips the /stations lookup entirely — that endpoint "
+            "ignores its networkCds/stateCds filters and always returns the "
+            "full national list (4,394 rows, 1.6MB, 17-26s), which routinely "
+            "exceeds the HTTP timeout. The nearest station to a fixed lat/lon "
+            "never changes, so resolving it every run buys nothing."
+        ),
+    )
     usda_zone: str
 
 
@@ -244,6 +256,7 @@ class AppConfig(BaseModel):
     seed_urls: list[str] = Field(default_factory=list)
     chemicals_file: Path = Field(default=DEFAULT_CHEMICALS_PATH)
     weeds_file: Path = Field(default=DEFAULT_WEEDS_PATH)
+    program_file: Path = Field(default=DEFAULT_PROGRAM_PATH)
     models: ModelsConfig
     http: HttpConfig
     notify: NotifyConfig
@@ -272,6 +285,7 @@ class Settings(BaseSettings):
     app: AppConfig
     chemicals: ChemicalsConfig = Field(default_factory=ChemicalsConfig)
     weeds: WeedsConfig = Field(default_factory=WeedsConfig)
+    program: ProgramConfig = Field(default_factory=ProgramConfig)
 
     @model_validator(mode="after")
     def _require_key_for_provider(self) -> Self:
@@ -282,6 +296,29 @@ class Settings(BaseSettings):
             msg = (
                 f"models.provider={provider!r} but {env_name} is unset. "
                 "Add it to .env (see .env.example)."
+            )
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _program_gates_reference_real_thresholds(self) -> Self:
+        """Every gate's `threshold_ref` must name a real `ClimateConfig` field.
+
+        Gates carry a field name rather than a number so thresholds stay
+        single-sourced. The cost of that indirection is that a typo would
+        produce a gate which silently never resolves — precisely the dead
+        config this project just finished auditing out. Fail at load.
+        """
+        valid = set(ClimateConfig.model_fields)
+        bad = {
+            item.id: item.gate.threshold_ref
+            for item in self.program.items
+            if item.gate is not None and item.gate.threshold_ref not in valid
+        }
+        if bad:
+            msg = (
+                f"calendar gates reference unknown climate thresholds: {bad}. "
+                f"Valid fields: {sorted(valid)}"
             )
             raise ValueError(msg)
         return self
@@ -328,4 +365,8 @@ class Settings(BaseSettings):
         if app.weeds_file.exists():
             weeds_raw = yaml.safe_load(app.weeds_file.read_text(encoding="utf-8")) or {}
             weeds = WeedsConfig.model_validate(weeds_raw)
-        return cls(app=app, chemicals=chemicals, weeds=weeds)
+        program = ProgramConfig()
+        if app.program_file.exists():
+            program_raw = yaml.safe_load(app.program_file.read_text(encoding="utf-8")) or {}
+            program = ProgramConfig.model_validate(program_raw)
+        return cls(app=app, chemicals=chemicals, weeds=weeds, program=program)

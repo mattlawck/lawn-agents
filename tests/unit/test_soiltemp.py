@@ -215,6 +215,62 @@ class TestSnapshotHappyPath:
         ]
 
 
+class TestPinnedStation:
+    """`scan_station_triplet` skips the station lookup entirely.
+
+    The AWDB `/stations` endpoint ignores its own `networkCds` and
+    `stateCds` filters and always returns the full national list — 4,394
+    rows, 1.63 MB, measured at 17-26s against a 15s timeout. It was being
+    called on every run to recompute a haversine whose answer never
+    changes for a fixed lat/lon, so it failed more often than it
+    succeeded. That matters for the watchdog, whose gates are
+    soil-temperature gates: no reading means no gate evaluation.
+    """
+
+    def test_pinned_triplet_makes_no_stations_request(
+        self, settings: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        requested: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requested.append(request.url.path)
+            return _make_handler()(request)
+
+        pinned = settings.app.model_copy(
+            update={
+                "location": settings.app.location.model_copy(
+                    update={"scan_station_triplet": "9999:SC:SCAN"}
+                )
+            }
+        )
+        _install_mock_client(monkeypatch, handler)
+        snap = soiltemp.snapshot(pinned)
+
+        assert snap is not None
+        assert snap.station_id == "9999:SC:SCAN"
+        assert snap.current_4in_f == 75.0
+        assert not any("/stations" in p for p in requested), (
+            f"pinned station should skip the 1.6MB lookup, but called: {requested}"
+        )
+
+    def test_unpinned_still_resolves_by_lookup(
+        self, settings: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without a pin, the slow path still works — just slowly."""
+        requested: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requested.append(request.url.path)
+            return _make_handler()(request)
+
+        _install_mock_client(monkeypatch, handler)
+        snap = soiltemp.snapshot(settings.app)
+
+        assert snap is not None
+        assert snap.station_id == "9999:SC:SCAN"
+        assert any("/stations" in p for p in requested)
+
+
 class TestStationFiltering:
     """The nearest-SCAN selection filters by network and respects max radius."""
 

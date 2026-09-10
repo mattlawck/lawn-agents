@@ -71,16 +71,7 @@ def snapshot(config: AppConfig) -> SoilSnapshot | None:
         return None
 
     with client:
-        station = _try(
-            lambda: _find_nearest_scan_station(
-                client,
-                config.location.latitude,
-                config.location.longitude,
-                MAX_STATION_RADIUS_MI,
-            ),
-            "nearest SCAN station lookup",
-            errors,
-        )
+        station = _resolve_station(client, config, errors)
         if station is None:
             errors.append(
                 f"no SCAN station within {MAX_STATION_RADIUS_MI:.0f} mi of "
@@ -140,6 +131,63 @@ def _build_client(config: AppConfig) -> httpx.Client:
     )
 
 
+def _resolve_station(
+    client: httpx.Client,
+    config: AppConfig,
+    errors: list[str],
+) -> _Station | None:
+    """Get the SCAN station to read, preferring a pinned triplet.
+
+    The `/stations` endpoint ignores its own query filters: `networkCds`
+    and `stateCds` are accepted and disregarded, so it always returns the
+    full national list — 4,394 rows, 1.63 MB, 17-26 seconds. Against the
+    configured 15s timeout that call fails more often than it succeeds,
+    and it was being made on every single run to recompute a haversine
+    whose answer never changes for a fixed lat/lon.
+
+    So: if `location.scan_station_triplet` is set, skip the lookup
+    entirely — no network call at all. Otherwise resolve it once and log
+    the result at warning level so the user can pin it. This matters
+    beyond latency: the weekly watchdog's gates are soil-temperature
+    gates, and an unattended job that can't read soil temp can't decide
+    whether a treatment window is opening.
+    """
+    pinned = config.location.scan_station_triplet
+    if pinned:
+        # Only the triplet is needed to pull data. Coordinates and
+        # distance exist for the resolution path and are irrelevant once
+        # the station is chosen, so they're filled from the lawn's own
+        # location rather than costing a 1.6MB round trip to look up.
+        return _Station(
+            triplet=pinned,
+            name=pinned,
+            latitude=config.location.latitude,
+            longitude=config.location.longitude,
+            distance_mi=0.0,
+        )
+
+    station = _try(
+        lambda: _find_nearest_scan_station(
+            client,
+            config.location.latitude,
+            config.location.longitude,
+            MAX_STATION_RADIUS_MI,
+        ),
+        "nearest SCAN station lookup",
+        errors,
+    )
+    if station is not None:
+        log.warning(
+            "soiltemp.station_resolved_by_full_scan",
+            triplet=station.triplet,
+            hint=(
+                "Set location.scan_station_triplet in config.yaml to skip this "
+                "1.6MB lookup, which frequently exceeds the HTTP timeout."
+            ),
+        )
+    return station
+
+
 def _find_nearest_scan_station(
     client: httpx.Client,
     lat: float,
@@ -148,9 +196,19 @@ def _find_nearest_scan_station(
 ) -> _Station | None:
     """Return the closest SCAN station within `max_miles`, or `None`.
 
-    The AWDB `/stations` endpoint's `networkCds` filter is unreliable,
-    so we fetch the full station list and filter client-side. ~4400
-    stations at ~150 bytes each is a trivially small response.
+    The slow path. Prefer `location.scan_station_triplet`.
+
+    The AWDB `/stations` endpoint doesn't merely have an "unreliable"
+    filter — it ignores query parameters outright. Measured 2026-09-09:
+    `networkCds=SCAN` returns 4,394 rows of which only 211 are SCAN (the
+    rest SNOW, USGS, SNTL, COOP, BOR), and `stateCds=SC` returns the
+    byte-identical payload. So the filtering has to happen client-side.
+
+    The response is 1.63 MB and takes 17-26 seconds to serve, against a
+    default 15s timeout — this call fails more often than it succeeds.
+    An earlier version of this docstring estimated "~150 bytes each,
+    trivially small"; it is ~370 bytes a row and the server is the
+    bottleneck, not the transfer.
     """
     response = client.get("/stations", params={"networkCds": "SCAN"})
     response.raise_for_status()

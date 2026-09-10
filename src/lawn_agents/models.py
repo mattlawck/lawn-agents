@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeFloat, model_validator
 
@@ -313,3 +313,110 @@ class WeedsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     weeds: dict[str, WeedAlias] = Field(default_factory=dict)
+
+
+class Urgency(StrEnum):
+    """How hard a calendar item pushes for attention.
+
+    Drives whether the weekly watchdog interrupts unprompted. A system
+    that speaks every week gets ignored; only items with a real cost of
+    being missed earn an unsolicited reminder.
+    """
+
+    CRITICAL = "critical"
+    """Miss the window and you wait a season — pre-emergent, preventive
+    grub control, preventive large-patch fungicide."""
+
+    ROUTINE = "routine"
+    """Should happen, but a week or two of slip costs little."""
+
+    OPTIONAL = "optional"
+    """Nice to do; never worth an interruption."""
+
+
+class GateDirection(StrEnum):
+    """Which way a metric must be moving to satisfy a gate."""
+
+    RISING = "rising"
+    FALLING = "falling"
+
+
+class ProgramGate(BaseModel):
+    """The measured condition that authorizes a calendar item.
+
+    `threshold_ref` names a field on `ClimateConfig` rather than carrying
+    a number, so a user who retunes their thresholds retunes the calendar
+    with them and the two can't disagree.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    metric: Literal["soil_temp_4in_f"] = "soil_temp_4in_f"
+    direction: GateDirection
+    threshold_ref: str = Field(
+        description="Field name on ClimateConfig, e.g. 'preemergent_fall_soil_temp_f'."
+    )
+    sustained_days: int = Field(
+        default=1,
+        ge=1,
+        le=30,
+        description=(
+            "Consecutive days the condition must hold. Above 1 because a "
+            "bare first-crossing is noisy: coastal January soil temps "
+            "oscillate across 55F all winter, so 'first rise through 55F' "
+            "fires in late January — far too early for pre-emergent."
+        ),
+    )
+
+
+class ProgramWindow(BaseModel):
+    """Month/day range during which an item becomes relevant.
+
+    Stored as month/day rather than dates because the shell repeats every
+    year. Windows may wrap the year end.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    start_month: int = Field(ge=1, le=12)
+    start_day: int = Field(ge=1, le=31)
+    end_month: int = Field(ge=1, le=12)
+    end_day: int = Field(ge=1, le=31)
+
+
+class ProgramItem(BaseModel):
+    """One recurring action in the standing annual program.
+
+    Carries timing and gating only — never a product or a rate. Those are
+    chemical specifics under ADR 0003 and are resolved from cited
+    passages at synthesis time.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str
+    name: str
+    category: ItemCategory
+    urgency: Urgency = Urgency.ROUTINE
+    window: ProgramWindow
+    gate: ProgramGate | None = None
+    lead_days: int = Field(default=14, ge=0, le=120)
+    rationale: str = ""
+    sources: list[str] = Field(default_factory=list)
+
+
+class ProgramConfig(BaseModel):
+    """The standing annual program, loaded from `data/calendar.yaml`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[ProgramItem] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _unique_ids(self) -> Self:
+        seen = [i.id for i in self.items]
+        dupes = sorted({x for x in seen if seen.count(x) > 1})
+        if dupes:
+            msg = f"duplicate calendar item ids: {dupes}. Ids key Todoist de-duplication."
+            raise ValueError(msg)
+        return self

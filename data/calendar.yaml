@@ -1,0 +1,232 @@
+# Standing annual program — the "shell" of recurring lawn actions.
+#
+# WHAT THIS FILE IS
+# -----------------
+# The obvious things that happen every year: pre-emergent rounds,
+# fertilizer, preventive insecticide, disease scouting. Each entry says
+# *what* to do, *roughly when*, and *what condition gates it* — and
+# nothing else.
+#
+# WHAT THIS FILE IS NOT
+# ---------------------
+# It names no products and no rates. Those are chemical specifics under
+# ADR 0003 and must come from a cited passage at synthesis time, checked
+# by ADR 0010's grounding. A calendar that hardcoded "apply 3 lb/1000 of
+# product X" would be exactly the unsourced chemical claim the whole
+# guardrail stack exists to prevent. The shell schedules; the RAG
+# prescribes.
+#
+# WHERE THE MONTH WINDOWS COME FROM
+# ---------------------------------
+# Empirical, not folklore. 4-inch soil temperature from the nearest SCAN
+# station (Youmans Farm, 2038:SC:SCAN), 4,217 daily observations,
+# 2014-06 to 2026-09, smoothed on a 7-day centered mean:
+#
+#   threshold                      median crossing   observed range
+#   55F rising  (spring pre-em)     Jan 28            Jan 01 - Mar 04
+#   65F rising  (green-up)          Mar 25            Feb 21 - Apr 13
+#   70F falling (fall pre-em)       Oct 17            Sep 29 - Nov 01
+#   55F falling (dormancy)          Dec 09            Nov 15 - Dec 29
+#
+# CAVEAT: Youmans Farm is ~80 miles from Mt Pleasant and further inland.
+# Coastal soils are moderated — milder winters, slightly later fall
+# cooling. Treat these as the best available regional anchor, not a
+# measurement of this lawn. The `gate` is the real trigger; `window` only
+# says when to start watching.
+#
+# The spring 55F crossing is deliberately NOT used as a bare trigger:
+# January mean soil temp is 52F, so the series oscillates across 55F all
+# winter and "first crossing" fires Jan 28 — far too early. That gate
+# carries `sustained_days` so a warm week can't start the season.
+#
+# SCHEMA
+# ------
+#   id            stable slug, used for Todoist task de-duplication
+#   name          human title; becomes the task title
+#   category      ChemicalCategory or GeneralCategory (models.py)
+#   urgency       critical | routine | optional
+#                 Only `critical` items trigger an unprompted reminder
+#                 when you haven't engaged. Miss pre-emergent and you
+#                 wait a year; miss a mowing-height tweak and you don't.
+#   window        month/day range to start watching (inclusive)
+#   gate          optional condition that actually authorizes the action
+#     metric        soil_temp_4in_f
+#     direction     rising | falling
+#     threshold_ref key in config.climate — keeps thresholds single-sourced
+#     sustained_days consecutive days required (default 1)
+#   lead_days     how far ahead to surface it, for buying + scheduling time
+#   rationale     why this timing; the synthesizer may quote it as context
+#   sources       corpus source hints to retrieve against
+
+items:
+  # --- Pre-emergent -------------------------------------------------
+  - id: preemergent-spring-1
+    name: "Spring pre-emergent — first round"
+    category: herbicide
+    urgency: critical
+    window: {start_month: 2, start_day: 1, end_month: 3, end_day: 15}
+    gate:
+      metric: soil_temp_4in_f
+      direction: rising
+      threshold_ref: preemergent_spring_soil_temp_f
+      sustained_days: 5
+    lead_days: 14
+    rationale: >-
+      Summer annuals (crabgrass, goosegrass) germinate as soil warms
+      through the mid-50s. The barrier has to be down and watered in
+      before germination, so this is gated on a sustained rise rather
+      than a single warm day.
+    sources: [hgic-zoysiagrass-maintenance-calendar, hgic-lawn-weed-control-timing-chart]
+
+  - id: preemergent-spring-2
+    name: "Spring pre-emergent — second round"
+    category: herbicide
+    urgency: critical
+    window: {start_month: 4, start_day: 1, end_month: 5, end_day: 15}
+    lead_days: 14
+    rationale: >-
+      Split application. Most spring pre-emergents lose residual before
+      the summer-annual germination window closes; the second round
+      extends coverage. Goosegrass in particular germinates later than
+      crabgrass and often escapes a single early application.
+    sources: [hgic-managing-weeds-in-warm-season-lawns]
+
+  - id: preemergent-fall
+    name: "Fall pre-emergent"
+    category: herbicide
+    urgency: critical
+    window: {start_month: 9, start_day: 15, end_month: 10, end_day: 20}
+    gate:
+      metric: soil_temp_4in_f
+      direction: falling
+      threshold_ref: preemergent_fall_soil_temp_f
+      sustained_days: 3
+    lead_days: 14
+    rationale: >-
+      Targets winter annuals — Poa annua, henbit, chickweed, lawn
+      burweed — which germinate as soil cools through about 70F. Apply
+      BEFORE the crossing, not after. Local median crossing is Oct 17
+      with an observed range of Sep 29 to Nov 01, so the window opens
+      mid-September to cover early years.
+    sources: [hgic-lawn-weed-control-timing-chart, ncsu-zoysiagrass-lawn-maintenance-calendar]
+
+  # --- Fertility ----------------------------------------------------
+  - id: fertilize-greenup
+    name: "First feed after green-up"
+    category: fertilizer
+    urgency: routine
+    window: {start_month: 4, start_day: 1, end_month: 5, end_day: 15}
+    gate:
+      metric: soil_temp_4in_f
+      direction: rising
+      threshold_ref: green_up_soil_temp_f
+      sustained_days: 5
+    lead_days: 14
+    rationale: >-
+      Do not feed dormant or transitioning turf. Nitrogen before full
+      green-up feeds weeds and large patch rather than the lawn. Wait
+      for sustained soil temps at the green-up threshold and for the
+      lawn to be actively growing — mowing regularly is the practical
+      signal.
+    sources: [hgic-fertilizing-lawns, hgic-zoysiagrass-maintenance-calendar]
+
+  - id: fertilize-summer
+    name: "Summer nitrogen — recurring through the growing season"
+    category: fertilizer
+    urgency: routine
+    window: {start_month: 5, start_day: 15, end_month: 8, end_day: 31}
+    lead_days: 10
+    rationale: >-
+      Zoysia's active growth period. Recurring applications through
+      summer; total annual N and per-application rate come from the
+      cited extension guidance, not from this file. Drought status
+      matters — defer or reduce under active drought stress.
+    sources: [hgic-fertilizing-lawns, supersod-zeon-maintenance]
+
+  - id: fertilize-fall-potassium
+    name: "Late-season potassium (no high nitrogen)"
+    category: fertilizer
+    urgency: routine
+    window: {start_month: 9, start_day: 1, end_month: 10, end_day: 15}
+    lead_days: 14
+    rationale: >-
+      Potassium supports cold hardiness going into dormancy. High
+      nitrogen in this window is the risk to avoid: it pushes soft
+      growth exactly as large patch becomes active. Keep N low here.
+    sources: [hgic-zoysiagrass-maintenance-calendar, ncsu-large-patch-in-turf]
+
+  # --- Disease ------------------------------------------------------
+  - id: fungicide-large-patch-fall
+    name: "Preventive fungicide — large patch"
+    category: fungicide
+    urgency: critical
+    window: {start_month: 9, start_day: 20, end_month: 11, end_day: 15}
+    gate:
+      metric: soil_temp_4in_f
+      direction: falling
+      threshold_ref: preemergent_fall_soil_temp_f
+      sustained_days: 3
+    lead_days: 14
+    rationale: >-
+      Large patch — not brown patch — is the zoysia disease, and it is a
+      fall and spring problem. NCSU: "Large patch begins to develop when
+      soil temperatures decline to 70F in the fall." Preventive
+      application must precede onset; symptoms usually appear later, and
+      often not until spring green-up. NOTE: a May-July fungicide
+      schedule is a brown-patch (cool-season) program and does not fit
+      this lawn.
+    sources: [ncsu-large-patch-in-turf, hgic-brown-patch-large-patch, hgic-zoysiagrass-maintenance-calendar]
+
+  - id: scout-large-patch-spring
+    name: "Scout for large patch during green-up"
+    category: monitoring
+    urgency: routine
+    window: {start_month: 3, start_day: 1, end_month: 5, end_day: 1}
+    lead_days: 7
+    rationale: >-
+      Clemson: most large patch symptom development occurs in spring
+      during green-up, even though the fungus was active the previous
+      fall. Look for circular patches slow to green up.
+    sources: [hgic-brown-patch-large-patch]
+
+  # --- Insects ------------------------------------------------------
+  - id: insecticide-grub-preventive
+    name: "Preventive white grub insecticide"
+    category: insecticide
+    urgency: critical
+    window: {start_month: 5, start_day: 1, end_month: 7, end_day: 15}
+    lead_days: 14
+    rationale: >-
+      Preventive products must be down before or during egg hatch.
+      Clemson: "Mole crickets and grub eggs will usually hatch
+      mid-summer. An insecticide application targeted at the smaller
+      nymphs is the most effective control even if damage has not yet
+      occurred." NCSU adds that timing tracks peak adult flight, and
+      that spring curative applications are not effective.
+    sources: [hgic-white-grub-management, ncsu-zoysiagrass-lawn-maintenance-calendar]
+
+  - id: scout-grubs-fall
+    name: "Scout for grub damage"
+    category: monitoring
+    urgency: routine
+    window: {start_month: 8, start_day: 15, end_month: 10, end_day: 15}
+    lead_days: 7
+    rationale: >-
+      By late summer grubs are third instar — harder to kill and past
+      the effective preventive window. Scouting here informs NEXT
+      season's preventive timing rather than this season's treatment.
+      Check the root zone and upper 1-3 inches of soil.
+    sources: [hgic-white-grub-management]
+
+  # --- Cultural -----------------------------------------------------
+  - id: soil-test
+    name: "Soil test"
+    category: general
+    urgency: routine
+    window: {start_month: 1, start_day: 15, end_month: 3, end_day: 1}
+    lead_days: 14
+    rationale: >-
+      Results take time to come back, so test before the season starts.
+      Drives the year's fertility decisions — without it, NPK choices
+      are guesswork.
+    sources: [hgic-soil-testing]
