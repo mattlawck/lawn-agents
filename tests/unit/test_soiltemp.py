@@ -249,9 +249,9 @@ class TestPinnedStation:
         assert snap is not None
         assert snap.station_id == "9999:SC:SCAN"
         assert snap.current_4in_f == 75.0
-        assert not any(
-            "/stations" in p for p in requested
-        ), f"pinned station should skip the 1.6MB lookup, but called: {requested}"
+        assert not any("/stations" in p for p in requested), (
+            f"pinned station should skip the 1.6MB lookup, but called: {requested}"
+        )
 
     def test_unpinned_still_resolves_by_lookup(
         self, settings: Settings, monkeypatch: pytest.MonkeyPatch

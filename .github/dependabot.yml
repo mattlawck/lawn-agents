@@ -33,6 +33,22 @@ updates:
         update-types: ["version-update:semver-major"]
 
   # GitHub Actions versions in .github/workflows/*.yml.
+  # Hook pins rot silently otherwise: ruff sat at v0.8.4 here while the
+  # venv resolved 0.15.14, and the two formatters disagreed.
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/New_York"
+    labels:
+      - "dependencies"
+      - "tooling"
+    commit-message:
+      prefix: "chore(hooks)"
+      include: "scope"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

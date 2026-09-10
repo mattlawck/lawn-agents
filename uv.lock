@@ -1030,7 +1030,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.9" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.14,<0.16" },
     { name = "structlog", specifier = ">=24.4" },
     { name = "trafilatura", specifier = ">=2.0" },
     { name = "types-pyyaml", marker = "extra == 'dev'" },

@@ -60,7 +60,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "ruff>=0.8",
+    # Keep in step with .pre-commit-config.yaml — see the note there.
+    "ruff>=0.15.14,<0.16",
     "mypy>=1.13",
     "pytest>=8.3",
     "pytest-cov>=6.0",
