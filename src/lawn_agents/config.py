@@ -38,6 +38,17 @@ class LocationConfig(BaseModel):
     latitude: float
     longitude: float
     coastal: bool = False
+    scan_station_triplet: str | None = Field(
+        default=None,
+        description=(
+            "Pin the USDA-NRCS SCAN station, e.g. '2038:SC:SCAN'. When set, "
+            "soiltemp skips the /stations lookup entirely — that endpoint "
+            "ignores its networkCds/stateCds filters and always returns the "
+            "full national list (4,394 rows, 1.6MB, 17-26s), which routinely "
+            "exceeds the HTTP timeout. The nearest station to a fixed lat/lon "
+            "never changes, so resolving it every run buys nothing."
+        ),
+    )
     usda_zone: str
 
 

@@ -70,7 +70,7 @@ items:
       direction: rising
       threshold_ref: preemergent_spring_soil_temp_f
       sustained_days: 5
-    lead_days: 21
+    lead_days: 14
     rationale: >-
       Summer annuals (crabgrass, goosegrass) germinate as soil warms
       through the mid-50s. The barrier has to be down and watered in
@@ -101,7 +101,7 @@ items:
       direction: falling
       threshold_ref: preemergent_fall_soil_temp_f
       sustained_days: 3
-    lead_days: 21
+    lead_days: 14
     rationale: >-
       Targets winter annuals — Poa annua, henbit, chickweed, lawn
       burweed — which germinate as soil cools through about 70F. Apply
@@ -166,7 +166,7 @@ items:
       direction: falling
       threshold_ref: preemergent_fall_soil_temp_f
       sustained_days: 3
-    lead_days: 21
+    lead_days: 14
     rationale: >-
       Large patch — not brown patch — is the zoysia disease, and it is a
       fall and spring problem. NCSU: "Large patch begins to develop when
@@ -195,7 +195,7 @@ items:
     category: insecticide
     urgency: critical
     window: {start_month: 5, start_day: 1, end_month: 7, end_day: 15}
-    lead_days: 21
+    lead_days: 14
     rationale: >-
       Preventive products must be down before or during egg hatch.
       Clemson: "Mole crickets and grub eggs will usually hatch
@@ -224,7 +224,7 @@ items:
     category: general
     urgency: routine
     window: {start_month: 1, start_day: 15, end_month: 3, end_day: 1}
-    lead_days: 21
+    lead_days: 14
     rationale: >-
       Results take time to come back, so test before the season starts.
       Drives the year's fertility decisions — without it, NPK choices

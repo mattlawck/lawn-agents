@@ -14,6 +14,9 @@ location:
   latitude: 34.00
   longitude: -81.03
   coastal: false
+  # Optional: pin your nearest SCAN station to skip a slow 1.6MB lookup.
+  # Run once without it; the log tells you which triplet to paste here.
+  # scan_station_triplet: "2038:SC:SCAN"
   usda_zone: "8a"
 
 # Phase 1 advises a single subject (the lawn). Future phases will add trees
