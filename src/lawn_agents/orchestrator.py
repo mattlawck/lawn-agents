@@ -178,38 +178,6 @@ def answer(
     )
 
 
-def scheduled_check(
-    settings: Settings,
-    *,
-    router: ChatModel | None = None,
-    synthesizer: ChatModel | None = None,
-    weather_fn: Callable[[AppConfig], WeatherSnapshot | None] | None = None,
-    soil_fn: Callable[[AppConfig], SoilSnapshot | None] | None = None,
-    drought_fn: Callable[[AppConfig], DroughtSnapshot | None] | None = None,
-    retrieve_fn: Callable[[str, AppConfig], list[Passage]] | None = None,
-    research_fn: Callable[[str, AppConfig], list[Passage]] | None = None,
-) -> Recommendation:
-    """Run the weekly scheduled-check workflow.
-
-    For Phase 1, this is `answer(...)` over a canned trigger question.
-    The router's `scheduled-check` intent will specialize the synthesis
-    prompt in a follow-up once we have more data on which actions
-    matter most weekly vs. ad-hoc.
-    """
-    return answer(
-        "Weekly scheduled check: what should I do for my lawn this week "
-        "given current conditions and the time of year?",
-        settings,
-        router=router,
-        synthesizer=synthesizer,
-        weather_fn=weather_fn,
-        soil_fn=soil_fn,
-        drought_fn=drought_fn,
-        retrieve_fn=retrieve_fn,
-        research_fn=research_fn,
-    )
-
-
 # --- internals -------------------------------------------------------------
 
 

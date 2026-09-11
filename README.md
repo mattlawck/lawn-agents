@@ -17,7 +17,7 @@ every chemical recommendation.
 ## Status
 
 **Phase 1 is feature-complete.** Zeon Zoysia advisory ships ad-hoc Q&A
-(`--ask`), weekly scheduled checks (`--scheduled`), monthly and annual
+(`--ask`), a weekly watchdog (`--scheduled`), monthly and annual
 forward-planning (`--plan-month` / `--plan-year`), a never-guess
 guardrail on every chemical recommendation (ADR 0003), a self-extending
 RAG via an allowlisted research subagent (ADR 0005), and launchd-based
@@ -135,9 +135,39 @@ Pydantic at startup.
 `ANTHROPIC_API_KEY` if you flip `models.provider` to `anthropic` in
 `config.yaml`.
 
+## The weekly watchdog
+
+`--scheduled` is a watchdog, not a digest. It evaluates the standing
+program (`data/calendar.yaml`) against today's date and current soil
+temperature, reconciles that against open Todoist tasks, and **prints
+nothing at all** unless something needs you:
+
+- a `critical` window is approaching and no task tracks it — it files one
+- an open task has gone past its due date — it surfaces it
+
+Two deliberate properties:
+
+**Silence is the default.** A weekly digest that always says something
+gets muted within a month, and a muted watchdog is worse than none — it
+leaves you believing you'd have been told.
+
+**It uses no LLM.** Deciding whether soil temperature crossed a threshold
+is arithmetic, and each item's reasoning already lives in the shell. So
+the unattended path costs nothing per run, can't hit a rate limit at 7am,
+and structurally cannot hallucinate a recommendation while you're asleep.
+Prose advice is what `--ask` is for — a conversation you start.
+
+Task de-duplication is exact: generated tasks carry `[item-id/year]` in
+the title. Hand-written tasks are never claimed, modified, or deleted;
+where one appears to overlap a program item, that's reported and the
+proposal suppressed.
+
+Requires `todoist.enabled`, `todoist.project_id` in `config.yaml`, and
+`TODOIST_API_TOKEN` in `.env`.
+
 ## Scheduling via launchd
 
-The weekly check is meant to run unattended via macOS launchd. A
+The watchdog is meant to run unattended via macOS launchd. A
 template plist lives at
 [`scripts/launchd/com.mattlawck.lawnagents.plist`](scripts/launchd/com.mattlawck.lawnagents.plist).
 
