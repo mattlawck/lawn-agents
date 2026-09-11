@@ -194,6 +194,27 @@ class GroundingConfig(BaseModel):
     )
 
 
+class TodoistConfig(BaseModel):
+    """Todoist is the task store and, in practice, the state layer.
+
+    Tasks are completed when the work is done, so the open-task list is
+    the whole picture: an overdue open task means it didn't happen, and a
+    task's absence means it did. `TODOIST_API_TOKEN` lives in `.env`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    project_id: str | None = Field(
+        default=None,
+        description="Todoist project id that generated tasks are written to.",
+    )
+    label: str = Field(
+        default="lawn-agents",
+        description="Label applied to generated tasks so they're filterable.",
+    )
+
+
 class ResearchConfig(BaseModel):
     """Self-extending RAG (ADR 0005) configuration."""
 
@@ -253,6 +274,7 @@ class AppConfig(BaseModel):
     knowledge: KnowledgeConfig
     research: ResearchConfig
     grounding: GroundingConfig = Field(default_factory=GroundingConfig)
+    todoist: TodoistConfig = Field(default_factory=TodoistConfig)
     seed_urls: list[str] = Field(default_factory=list)
     chemicals_file: Path = Field(default=DEFAULT_CHEMICALS_PATH)
     weeds_file: Path = Field(default=DEFAULT_WEEDS_PATH)
@@ -279,6 +301,7 @@ class Settings(BaseSettings):
 
     gemini_api_key: SecretStr | None = Field(default=None, alias="GEMINI_API_KEY")
     anthropic_api_key: SecretStr | None = Field(default=None, alias="ANTHROPIC_API_KEY")
+    todoist_api_token: SecretStr | None = Field(default=None, alias="TODOIST_API_TOKEN")
     nws_user_agent: str | None = Field(default=None, alias="NWS_USER_AGENT")
     lawn_agents_index_dir: Path | None = Field(default=None, alias="LAWN_AGENTS_INDEX_DIR")
 

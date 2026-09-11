@@ -124,8 +124,7 @@ def evaluate(
             gate_status,
             start,
             end,
-            f"window opens in {days} day{'s' if days != 1 else ''} ({start:%b %d}); "
-            "source product and plan now",
+            f"window opens in {days} day{'s' if days != 1 else ''} ({start:%b %d})",
         )
     if today > end:
         return Assessment(

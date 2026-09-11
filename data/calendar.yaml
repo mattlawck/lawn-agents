@@ -223,10 +223,73 @@ items:
     name: "Soil test"
     category: general
     urgency: routine
-    window: {start_month: 1, start_day: 15, end_month: 3, end_day: 1}
+    window: {start_month: 9, start_day: 1, end_month: 10, end_day: 31}
     lead_days: 14
     rationale: >-
-      Results take time to come back, so test before the season starts.
-      Drives the year's fertility decisions — without it, NPK choices
-      are guesswork.
+      Sample in fall. Turnaround takes weeks, so testing now puts results
+      in hand well before spring fertility decisions have to be made —
+      testing in February means guessing through green-up while waiting.
+      Drives the whole year's NPK and lime plan.
     sources: [hgic-soil-testing]
+
+  # --- Cultural / equipment ------------------------------------------
+  - id: mow-height-fall
+    name: "Raise height of cut for fall"
+    category: mowing
+    urgency: routine
+    window: {start_month: 9, start_day: 15, end_month: 10, end_day: 31}
+    lead_days: 7
+    rationale: >-
+      Raising the cut going into the cool season gives the canopy more
+      leaf area to carry the plant into dormancy and more root reserve.
+      It also reduces stress at the same time large patch becomes active.
+      Confirm the specific height for this cultivar against the cited
+      guidance rather than assuming.
+    sources: [hgic-zoysiagrass-maintenance-calendar, supersod-zeon-maintenance]
+
+  - id: mow-height-spring
+    name: "Lower height of cut for spring green-up"
+    category: mowing
+    urgency: routine
+    window: {start_month: 3, start_day: 15, end_month: 4, end_day: 30}
+    gate:
+      metric: soil_temp_4in_f
+      direction: rising
+      threshold_ref: green_up_soil_temp_f
+      sustained_days: 5
+    lead_days: 7
+    rationale: >-
+      Drop back to the growing-season height once the lawn is actively
+      growing, removing winter-damaged leaf so new growth gets light.
+      Gated on green-up: cutting low while still dormant scalps the turf
+      with no capacity to recover.
+    sources: [hgic-zoysiagrass-maintenance-calendar]
+
+  - id: mow-bag-leaves-fall
+    name: "Bag-mow leaves"
+    category: mowing
+    urgency: routine
+    window: {start_month: 10, start_day: 15, end_month: 12, end_day: 31}
+    lead_days: 7
+    rationale: >-
+      Recurring through leaf drop. Fallen leaves mat over semi-dormant
+      turf, block the light it needs to build reserves, and hold moisture
+      against the canopy — the same conditions large patch wants, in the
+      same season it is active. Bag rather than mulch where the leaf load
+      is heavy enough to leave a layer.
+    sources: [hgic-zoysiagrass-maintenance-calendar]
+
+  - id: mower-service-annual
+    name: "Annual mower service"
+    category: general
+    urgency: routine
+    window: {start_month: 12, start_day: 1, end_month: 2, end_day: 15}
+    lead_days: 14
+    rationale: >-
+      Dormancy is the window — the mower isn't needed, and parts and shop
+      slots are easy to get before the spring rush. Covers oil, air
+      filter, spark plug, fuel system and blade sharpening. A dull blade
+      tears rather than cuts, and torn leaf tips brown off and open the
+      plant to disease, so blade condition is an agronomic issue rather
+      than just maintenance.
+    sources: [hgic-zoysiagrass-maintenance-calendar]
