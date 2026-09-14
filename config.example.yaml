@@ -140,6 +140,18 @@ grounding:
   # honest quotes. Raise toward 1.0 to demand near-verbatim quoting.
   snippet_overlap_threshold: 0.6
 
+todoist:
+  # Optional. When enabled, `--scheduled` files Todoist tasks for
+  # critical windows that nothing is tracking yet, and stays silent
+  # otherwise. Needs TODOIST_API_TOKEN in .env.
+  #
+  # Generated tasks carry a marker in the title — "[item-id/year]" —
+  # so de-duplication is exact and hand-written tasks are never
+  # claimed, modified, or deleted.
+  enabled: false
+  project_id: null   # e.g. "6gF3Fq2xGqPV5MPX"
+  label: "lawn-agents"
+
 research:
   # Self-extending RAG. When knowledge.py returns weak results the
   # orchestrator may dispatch a research subagent constrained to this

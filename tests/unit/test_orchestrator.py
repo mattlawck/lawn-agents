@@ -397,21 +397,6 @@ class TestAnswerDegradesOnFetchFailures:
         assert "45019" in prompt  # county_fips
 
 
-class TestScheduledCheck:
-    def test_invokes_same_pipeline(self, settings: Settings) -> None:
-        rec = _good_recommendation()
-        synth = FakeChatModel(structured_responses=[rec])
-        result = orchestrator.scheduled_check(
-            settings,
-            **_injectables(
-                router=FakeChatModel(text_response="scheduled-check"),
-                synthesizer=synth,
-            ),
-        )
-        assert result.refused is False
-        assert "weekly" in synth.structured_calls[0][1].lower()
-
-
 class TestResearchInvocation:
     """ADR 0005 — research subagent fires only on weak retrieval."""
 

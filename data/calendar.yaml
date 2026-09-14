@@ -65,17 +65,22 @@ items:
     category: herbicide
     urgency: critical
     window: {start_month: 2, start_day: 1, end_month: 3, end_day: 15}
-    gate:
-      metric: soil_temp_4in_f
-      direction: rising
-      threshold_ref: preemergent_spring_soil_temp_f
-      sustained_days: 5
+    # NO GATE, deliberately. The conventional 55F rising trigger assumes a
+    # winter cold enough for soil to fall below it. Coastal SC soil barely
+    # does: January averages 52F and February 55F, so the sustained
+    # crossing computes to Jan 05 across 12 years of station data — the
+    # gate would fire in midwinter, months before crabgrass germinates.
+    # A threshold that is already satisfied all season is not a trigger,
+    # it is noise, so this window is calendar-driven and the soil
+    # temperature is context rather than a gate.
     lead_days: 14
     rationale: >-
       Summer annuals (crabgrass, goosegrass) germinate as soil warms
       through the mid-50s. The barrier has to be down and watered in
-      before germination, so this is gated on a sustained rise rather
-      than a single warm day.
+      before germination. NOTE: unlike most items here this is not
+      soil-temperature gated — coastal soil sits above 55F for most of
+      the winter, so that threshold cannot distinguish "time to act"
+      from "any day in January". Confirm against local conditions.
     sources: [hgic-zoysiagrass-maintenance-calendar, hgic-lawn-weed-control-timing-chart]
 
   - id: preemergent-spring-2
@@ -101,6 +106,14 @@ items:
       direction: falling
       threshold_ref: preemergent_fall_soil_temp_f
       sustained_days: 3
+      # Median date this gate actually fires locally (12 yrs SCAN data,
+      # same sustained rule the code evaluates): Oct 19, range Oct 01 -
+      # Dec 17. Apply ~12 days ahead of it so the barrier is down before
+      # germination — this is the date the task is due, NOT the window
+      # start, which only means "start watching".
+      expected_month: 10
+      expected_day: 19
+      apply_offset_days: -12
     lead_days: 14
     rationale: >-
       Targets winter annuals — Poa annua, henbit, chickweed, lawn
@@ -121,6 +134,11 @@ items:
       direction: rising
       threshold_ref: green_up_soil_temp_f
       sustained_days: 5
+      # Green-up gate fires around Apr 02 locally (range Feb 25 - Jun 23).
+      # Offset 0: feed once the lawn is actually growing, not before.
+      expected_month: 4
+      expected_day: 2
+      apply_offset_days: 0
     lead_days: 14
     rationale: >-
       Do not feed dormant or transitioning turf. Nitrogen before full
@@ -166,6 +184,11 @@ items:
       direction: falling
       threshold_ref: preemergent_fall_soil_temp_f
       sustained_days: 3
+      # NCSU puts large-patch onset at the same 70F decline; locally that
+      # fires around Oct 19. Preventive means ahead of onset, not after.
+      expected_month: 10
+      expected_day: 19
+      apply_offset_days: -7
     lead_days: 14
     rationale: >-
       Large patch — not brown patch — is the zoysia disease, and it is a
@@ -257,6 +280,9 @@ items:
       direction: rising
       threshold_ref: green_up_soil_temp_f
       sustained_days: 5
+      expected_month: 4
+      expected_day: 2
+      apply_offset_days: 0
     lead_days: 7
     rationale: >-
       Drop back to the growing-season height once the lawn is actively

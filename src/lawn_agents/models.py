@@ -367,6 +367,31 @@ class ProgramGate(BaseModel):
             "fires in late January — far too early for pre-emergent."
         ),
     )
+    expected_month: int | None = Field(
+        default=None, ge=1, le=12, description="Median month this gate fires locally."
+    )
+    expected_day: int | None = Field(
+        default=None, ge=1, le=31, description="Median day this gate fires locally."
+    )
+    apply_offset_days: int = Field(
+        default=0,
+        ge=-60,
+        le=60,
+        description=(
+            "Days relative to the expected gate date at which the action "
+            "should actually happen. Negative means act BEFORE the gate "
+            "fires — a pre-emergent barrier has to be down before the seed "
+            "germinates, and a preventive fungicide before disease onset. "
+            "Zero or positive means act once conditions have arrived."
+        ),
+    )
+
+    @property
+    def expected(self) -> tuple[int, int] | None:
+        """Month/day the gate is expected to fire, if known."""
+        if self.expected_month is None or self.expected_day is None:
+            return None
+        return self.expected_month, self.expected_day
 
 
 class ProgramWindow(BaseModel):
