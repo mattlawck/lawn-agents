@@ -256,3 +256,51 @@ class TestDryRun:
         assert created == []
         assert result.plan is not None
         assert result.plan.proposals, "it should still have found work to propose"
+
+
+class TestUnattendedWritesAreCreateOnly:
+    """The 7am run may add tasks. It may never remove or complete them.
+
+    This is a security property, not an implementation detail. The
+    watchdog runs with no human present and holds a token with full
+    read/write on the whole Todoist account. Creating a task it turns
+    out you didn't need costs a click; closing one falsely records work
+    as done and poisons the completion signal the loop reads; deleting
+    one destroys something you wrote. Only the first is recoverable
+    without you noticing something went wrong.
+    """
+
+    def test_watchdog_issues_no_deletes_or_closes(
+        self, settings: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _no_soil(monkeypatch)
+        calls: list[tuple[str, str]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append((request.method, request.url.path))
+            if request.method == "GET":
+                return httpx.Response(200, json={"results": []})
+            import json
+
+            body = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "id": "new",
+                    "content": body["content"],
+                    "description": "",
+                    "due": {"date": body["due_date"]} if body.get("due_date") else None,
+                    "labels": [],
+                },
+            )
+
+        client = todoist.TodoistClient(
+            "tok",
+            "proj-1",
+            client=httpx.Client(base_url=todoist.API_BASE, transport=httpx.MockTransport(handler)),
+        )
+        watchdog.run(settings, today=date(2026, 9, 11), client=client)
+
+        assert calls, "the run should have talked to Todoist at all"
+        assert not any(method == "DELETE" for method, _ in calls)
+        assert not any(path.endswith("/close") for _, path in calls)
