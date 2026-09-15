@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -27,7 +28,6 @@ from lawn_agents.models import Passage, SourceTier
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
-    from datetime import datetime
 
     from lawn_agents.config import AppConfig, SourceTiersConfig
 
@@ -35,6 +35,10 @@ log = get_logger(__name__)
 
 # bge-small-en-v1.5 produces 384-dim vectors.
 DEFAULT_VECTOR_DIM = 384
+# BM25 scores are unbounded and not comparable to cosine similarity, so a
+# text-only hit gets a score that sits in the medium confidence band
+# rather than falsely reading as strong or weak.
+_BM25_NEUTRAL_SCORE = 0.65
 TABLE_NAME = "chunks"
 
 
@@ -153,6 +157,16 @@ class VectorStore(Protocol):
     def search(self, query_vector: list[float], *, k: int) -> list[Passage]:
         """Return the top-k nearest chunks as `Passage`s, sorted by score desc."""
 
+    def search_text(self, query: str, *, k: int) -> list[Passage]:
+        """Return the top-k chunks by full-text (BM25) relevance.
+
+        Complements `search`, which cannot find them. Embeddings encode
+        meaning, and a product name carries almost none — "Sedge Ender"
+        is a rare token that gets washed out by whatever else is in the
+        sentence. Exact-term matching is what actually retrieves a
+        specific label.
+        """
+
     def count(self) -> int:
         """Total chunks currently stored."""
 
@@ -231,50 +245,94 @@ class LanceDBStore:
 
     def search(self, query_vector: list[float], *, k: int) -> list[Passage]:
         """See `VectorStore.search`. Maps LanceDB distance to a [0, 1] score."""
-        from datetime import datetime
-
         table = self._ensure_table()
         results = table.search(query_vector).limit(k).to_list()
-        passages: list[Passage] = []
-        for row in results:
-            # LanceDB returns `_distance` (lower = closer). For unit
-            # vectors with cosine distance, range is [0, 2]; clamp to a
-            # similarity score in [0, 1].
-            distance = float(row.get("_distance", 1.0))
-            score = max(0.0, min(1.0, 1.0 - distance / 2.0))
-            page_raw = row.get("page", 0)
-            page_val: int | None = int(page_raw) if page_raw else None
-            fetched_raw = row.get("fetched_at", "")
-            fetched_val: datetime | None = (
-                datetime.fromisoformat(fetched_raw) if fetched_raw else None
-            )
-            url_raw = row.get("url") or None
-            passages.append(
-                Passage(
-                    content=str(row["content"]),
-                    score=score,
-                    source_id=str(row["source_id"]),
-                    source_title=str(row["source_title"]),
-                    url=str(url_raw) if url_raw else None,
-                    page=page_val,
-                    fetched_at=fetched_val,
-                    auto_ingested=bool(row.get("auto_ingested", False)),
-                    requires_review=bool(row.get("requires_review", False)),
-                )
-            )
-        return passages
+        return [_row_to_passage(row) for row in results]
 
     def count(self) -> int:
         """See `VectorStore.count`."""
         table = self._ensure_table()
         return int(table.count_rows())
 
+    def ensure_fts_index(self) -> None:
+        """Create or refresh the full-text index over chunk content.
+
+        Called by the ingester after writing. Rebuilt wholesale rather
+        than updated incrementally: the corpus is small (hundreds of
+        chunks), and a stale text index silently returns nothing for
+        newly added sources — a failure that looks exactly like "the
+        corpus doesn't cover that", which is the one conclusion this
+        system must never reach by accident.
+        """
+        try:
+            self._ensure_table().create_fts_index("content", replace=True)
+            log.info("knowledge.fts_index_built")
+        except Exception as exc:
+            log.warning("knowledge.fts_index_failed", error=str(exc))
+
+    def search_text(self, query: str, *, k: int) -> list[Passage]:
+        """See `VectorStore.search_text`."""
+        table = self._ensure_table()
+        rows = table.search(query, query_type="fts").limit(k).to_list()
+        return [_row_to_passage(row) for row in rows]
+
+
+def _row_to_passage(row: dict[str, Any]) -> Passage:
+    """Build a `Passage` from a LanceDB result row.
+
+    Vector search returns `_distance`; full-text returns `_score` on a
+    different, unbounded scale. Only the vector distance maps onto the
+    0-1 similarity the weak/strong thresholds are calibrated against, so
+    BM25 hits carry a neutral score and their ranking is expressed
+    through fusion order instead.
+    """
+    if "_distance" in row:
+        # Cosine distance over unit vectors spans [0, 2]; clamp to [0, 1].
+        distance = float(row.get("_distance", 1.0))
+        score = max(0.0, min(1.0, 1.0 - distance / 2.0))
+    else:
+        score = _BM25_NEUTRAL_SCORE
+    page_raw = row.get("page", 0)
+    fetched_raw = row.get("fetched_at", "")
+    url_raw = row.get("url") or None
+    return Passage(
+        content=str(row["content"]),
+        score=score,
+        source_id=str(row["source_id"]),
+        source_title=str(row["source_title"]),
+        url=str(url_raw) if url_raw else None,
+        page=int(page_raw) if page_raw else None,
+        fetched_at=datetime.fromisoformat(fetched_raw) if fetched_raw else None,
+        auto_ingested=bool(row.get("auto_ingested", False)),
+        requires_review=bool(row.get("requires_review", False)),
+    )
+
 
 # --- public API -----------------------------------------------------------
 
 
 def retrieve(query: str, config: AppConfig, *, top_k: int | None = None) -> list[Passage]:
-    """Retrieve top-k passages relevant to `query`.
+    """Retrieve top-k passages by fusing vector and full-text search.
+
+    Hybrid because neither half is sufficient alone, and their failures
+    are opposite:
+
+    - **Vector** finds passages that *mean* the same thing. It is how
+      "my grass is turning yellow in patches" reaches a disease
+      factsheet. It cannot find a product by name: probed 2026-09-14,
+      the query "Sedge Ender sulfentrazone application rate per 1000 sq
+      ft Zoysia matrella" returned zero Sedge Ender chunks and instead
+      returned three other products' rate tables, because "application
+      rate per 1000 sq ft" dominates the embedding and every label
+      matches it.
+    - **Full-text (BM25)** finds exact terms. "Sedge Ender" puts the
+      Sedge Ender label at rank 0. It cannot bridge vocabulary at all —
+      it will never connect "Japanese clover" to "annual lespedeza".
+
+    Scores from the two are not comparable (cosine similarity vs. BM25),
+    so they are fused by Reciprocal Rank Fusion, which is rank-based and
+    therefore scale-invariant — the same reasoning as ADR 0008's
+    multi-query fusion.
 
     Args:
         query: Natural-language question or topic phrase.
@@ -282,15 +340,44 @@ def retrieve(query: str, config: AppConfig, *, top_k: int | None = None) -> list
         top_k: Override `knowledge.retrieval.rerank_top_k` if non-None.
 
     Returns:
-        Passages sorted by descending score. Empty list if the index is
-        empty or no passages clear the relevance floor.
+        Passages sorted by fused relevance. Empty if the index is empty.
     """
     embeddings = _build_embeddings(config)
     store = _build_store(config)
+    retrieval = config.knowledge.retrieval
+    k = top_k if top_k is not None else retrieval.rerank_top_k
 
-    query_vec = embeddings.embed_query(query)
-    k = top_k if top_k is not None else config.knowledge.retrieval.rerank_top_k
-    return store.search(query_vec, k=k)
+    vector_hits = store.search(embeddings.embed_query(query), k=retrieval.top_k_vector)
+    text_hits: list[Passage] = []
+    if retrieval.top_k_bm25 > 0:
+        try:
+            text_hits = store.search_text(query, k=retrieval.top_k_bm25)
+        except Exception as exc:
+            # A missing or stale FTS index must not take retrieval down;
+            # degrade to vector-only and say so.
+            log.warning("knowledge.fts_unavailable", error=str(exc))
+
+    if not text_hits:
+        return vector_hits[:k]
+    return _fuse(vector_hits, text_hits, k=k)
+
+
+def _fuse(*rankings: list[Passage], k: int) -> list[Passage]:
+    """Reciprocal Rank Fusion over several ranked passage lists."""
+    scores: dict[tuple[str, str], float] = {}
+    best: dict[tuple[str, str], Passage] = {}
+    for ranking in rankings:
+        for rank, passage in enumerate(ranking, start=1):
+            key = (passage.source_id, passage.content)
+            scores[key] = scores.get(key, 0.0) + 1.0 / (RRF_K + rank)
+            existing = best.get(key)
+            if existing is None or passage.score > existing.score:
+                best[key] = passage
+    ordered = sorted(scores, key=lambda key: scores[key], reverse=True)
+    return [best[key] for key in ordered[:k]]
+
+
+RRF_K = 60  # Cormack et al. 2009, same constant the orchestrator uses.
 
 
 def is_weak(

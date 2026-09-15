@@ -200,3 +200,85 @@ class TestAgainstShippedProgram:
         plan = reconcile.reconcile(shipped.items, tasks, climate, today=TODAY)
         assert plan.proposals == []
         assert not plan.needs_attention
+
+
+class TestSpacing:
+    """Several windows open at once; a person cannot do five jobs in a day.
+
+    Matt's first generated set put five tasks on one date. Overflow is
+    pushed later, never earlier — being a few days late inside a window
+    is recoverable, being early enough to waste a product's residual is
+    not.
+    """
+
+    def _open_item(self, item_id: str) -> ProgramItem:
+        return ProgramConfig.model_validate(
+            {
+                "items": [
+                    {
+                        "id": item_id,
+                        "name": f"Item {item_id}",
+                        "category": "mowing",
+                        "urgency": "routine",
+                        "window": {
+                            "start_month": 9,
+                            "start_day": 1,
+                            "end_month": 10,
+                            "end_day": 31,
+                        },
+                        "lead_days": 14,
+                    }
+                ]
+            }
+        ).items[0]
+
+    def test_overflow_moves_to_later_days(self, climate: ClimateConfig) -> None:
+        items = [self._open_item(f"i{n}") for n in range(5)]
+        plan = reconcile.reconcile(items, [], climate, today=TODAY, max_per_day=2)
+        counts: dict[date, int] = {}
+        for p in plan.proposals:
+            counts[p.due] = counts.get(p.due, 0) + 1
+        assert max(counts.values()) <= 2
+        assert len(plan.proposals) == 5, "spacing must not drop anything"
+
+    def test_nothing_is_moved_earlier(self, climate: ClimateConfig) -> None:
+        items = [self._open_item(f"i{n}") for n in range(5)]
+        plan = reconcile.reconcile(items, [], climate, today=TODAY, max_per_day=2)
+        assert all(p.due >= TODAY for p in plan.proposals)
+
+    def test_spacing_respects_the_window_end(self, climate: ClimateConfig) -> None:
+        items = [self._open_item(f"i{n}") for n in range(5)]
+        plan = reconcile.reconcile(items, [], climate, today=TODAY, max_per_day=1)
+        assert all(p.due <= p.assessment.window_end for p in plan.proposals)
+
+    def test_gated_target_survives_spacing(self, climate: ClimateConfig) -> None:
+        """A projected application date must not be dragged forward."""
+        gated = ProgramConfig.model_validate(
+            {
+                "items": [
+                    {
+                        "id": "preemergent-fall",
+                        "name": "Fall pre-emergent",
+                        "category": "herbicide",
+                        "urgency": "critical",
+                        "window": {
+                            "start_month": 9,
+                            "start_day": 15,
+                            "end_month": 10,
+                            "end_day": 20,
+                        },
+                        "gate": {
+                            "direction": "falling",
+                            "threshold_ref": "preemergent_fall_soil_temp_f",
+                            "sustained_days": 3,
+                            "expected_month": 10,
+                            "expected_day": 19,
+                            "apply_offset_days": -12,
+                        },
+                        "lead_days": 14,
+                    }
+                ]
+            }
+        ).items
+        plan = reconcile.reconcile(gated, [], climate, today=TODAY, max_per_day=2)
+        assert plan.proposals[0].due == date(2026, 10, 7)

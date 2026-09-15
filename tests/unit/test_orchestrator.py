@@ -397,21 +397,6 @@ class TestAnswerDegradesOnFetchFailures:
         assert "45019" in prompt  # county_fips
 
 
-class TestScheduledCheck:
-    def test_invokes_same_pipeline(self, settings: Settings) -> None:
-        rec = _good_recommendation()
-        synth = FakeChatModel(structured_responses=[rec])
-        result = orchestrator.scheduled_check(
-            settings,
-            **_injectables(
-                router=FakeChatModel(text_response="scheduled-check"),
-                synthesizer=synth,
-            ),
-        )
-        assert result.refused is False
-        assert "weekly" in synth.structured_calls[0][1].lower()
-
-
 class TestResearchInvocation:
     """ADR 0005 — research subagent fires only on weak retrieval."""
 
@@ -754,7 +739,7 @@ class TestRetrieveWithWeedAliases:
         return settings.app
 
     def test_no_weeds_matched_returns_single_query_results(self, app: Any) -> None:
-        from lawn_agents.orchestrator import _retrieve_with_weed_aliases
+        from lawn_agents.orchestrator import _retrieve_with_bridges
 
         canned = [_passage(content="generic")]
 
@@ -762,11 +747,11 @@ class TestRetrieveWithWeedAliases:
             assert q == "what fertilizer should I use?"
             return canned
 
-        out = _retrieve_with_weed_aliases("what fertilizer should I use?", {}, app, retrieve)
+        out = _retrieve_with_bridges("what fertilizer should I use?", {}, {}, app, retrieve)
         assert out == canned
 
     def test_rrf_promotes_chunk_appearing_in_multiple_queries(self, app: Any) -> None:
-        from lawn_agents.orchestrator import _retrieve_with_weed_aliases
+        from lawn_agents.orchestrator import _retrieve_with_bridges
 
         # The "label" chunk ranks #2 on both queries; the "fertilizer"
         # chunk only appears once. RRF should rank the label chunk
@@ -809,7 +794,7 @@ class TestRetrieveWithWeedAliases:
                 category=WeedCategory.BROADLEAF,
             )
         }
-        out = _retrieve_with_weed_aliases("I have Japanese clover", weeds, app, retrieve)
+        out = _retrieve_with_bridges("I have Japanese clover", weeds, {}, app, retrieve)
         # RRF scores (k=60):
         #   fert:  1/(60+1) = 0.0164
         #   label: 1/(60+2) + 1/(60+1) = 0.0161 + 0.0164 = 0.0325
@@ -818,7 +803,7 @@ class TestRetrieveWithWeedAliases:
         assert [p.source_id for p in out[:3]] == ["bayer", "other", "eguide"]
 
     def test_top_k_cap_respected(self, app: Any) -> None:
-        from lawn_agents.orchestrator import _retrieve_with_weed_aliases
+        from lawn_agents.orchestrator import _retrieve_with_bridges
 
         many = [
             Passage(
@@ -834,5 +819,5 @@ class TestRetrieveWithWeedAliases:
                 aliases=["Annual lespedeza"], category=WeedCategory.BROADLEAF
             )
         }
-        out = _retrieve_with_weed_aliases("Japanese clover", weeds, app, lambda _q, _c: many)
+        out = _retrieve_with_bridges("Japanese clover", weeds, {}, app, lambda _q, _c: many)
         assert len(out) == app.knowledge.retrieval.rerank_top_k

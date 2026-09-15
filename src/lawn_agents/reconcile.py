@@ -23,7 +23,8 @@ approval; `apply` performs it only once a human has said yes.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from lawn_agents import schedule, todoist
@@ -90,6 +91,7 @@ def reconcile(
     today: date,
     soil: SoilSnapshot | None = None,
     urgent_only: bool = False,
+    max_per_day: int = 2,
 ) -> Plan:
     """Compare the program's wants against Todoist's open tasks.
 
@@ -103,6 +105,10 @@ def reconcile(
             watchdog sets this — an unattended reminder has to earn the
             interruption, and a system that files routine chores every
             Monday gets muted.
+        max_per_day: Cap on tasks sharing a due date. Several windows
+            legitimately open at once, but handing someone five jobs due
+            the same Saturday guarantees four slip. Overflow is pushed
+            later, never earlier, and never past the window.
 
     Returns:
         A `Plan`. Nothing is written.
@@ -131,6 +137,8 @@ def reconcile(
         if urgent_only and item.urgency.value != "critical":
             continue
         plan.proposals.append(_propose(assessment, today))
+
+    plan.proposals = _space_out(plan.proposals, max_per_day=max_per_day)
 
     log.info(
         "reconcile.done",
@@ -186,9 +194,31 @@ _GENERIC = frozenset(
 )
 
 
+def _space_out(proposals: list[Proposal], *, max_per_day: int) -> list[Proposal]:
+    """Push overflow to later days so no single date is overloaded.
+
+    Only ever moves a task later, and never beyond its window: being a
+    few days late inside the window is recoverable, being early enough to
+    waste a product's residual is not.
+    """
+    if max_per_day < 1:
+        return proposals
+    used: dict[date, int] = {}
+    spaced: list[Proposal] = []
+    for proposal in sorted(proposals, key=lambda p: p.due):
+        due = proposal.due
+        while used.get(due, 0) >= max_per_day and due < proposal.assessment.window_end:
+            due += timedelta(days=1)
+        used[due] = used.get(due, 0) + 1
+        spaced.append(replace(proposal, due=due) if due != proposal.due else proposal)
+    return spaced
+
+
 def _propose(assessment: Assessment, today: date) -> Proposal:
     item = assessment.item
-    due = max(assessment.window_start, today)
+    # `target`, not `window_start`: the window says when to start
+    # watching, the target says when to act.
+    due = max(assessment.target, today)
     reason = assessment.reason.strip()
     # Not `.capitalize()` — that lowercases the rest of the string and
     # turns "Sep 15" into "sep 15".

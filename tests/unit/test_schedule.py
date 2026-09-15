@@ -239,3 +239,54 @@ class TestEvaluateAll:
         )
         fall = next(a for a in results if a.item.id == "preemergent-fall")
         assert fall.status is schedule.ItemStatus.APPROACHING
+
+
+class TestTargetDate:
+    """`target` is when to act; `window_start` is when to start watching.
+
+    Conflating them was a real bug: the fall pre-emergent came out due
+    Sep 15 with soil at 82F, five weeks before the 70F gate was expected
+    to fire — early enough that most of the herbicide's residual would be
+    spent before the weed it targets germinated.
+    """
+
+    def _gated_item(self, offset: int) -> ProgramItem:
+        return _item(
+            gate={
+                "metric": "soil_temp_4in_f",
+                "direction": "falling",
+                "threshold_ref": "preemergent_fall_soil_temp_f",
+                "sustained_days": 3,
+                "expected_month": 10,
+                "expected_day": 19,
+                "apply_offset_days": offset,
+            }
+        )
+
+    def test_target_precedes_the_expected_gate_date(self, climate: ClimateConfig) -> None:
+        a = schedule.evaluate(self._gated_item(-12), climate, today=date(2026, 9, 14))
+        assert a.target == date(2026, 10, 7)
+        assert a.target > a.window_start, "must not be due when the window merely opens"
+
+    def test_satisfied_gate_means_act_now(self, climate: ClimateConfig) -> None:
+        """If conditions already say go, don't wait for the projection."""
+        a = schedule.evaluate(
+            self._gated_item(-12),
+            climate,
+            today=date(2026, 9, 20),
+            soil=_soil([69, 68, 67]),
+        )
+        assert a.gate_status is schedule.GateStatus.SATISFIED
+        assert a.target == date(2026, 9, 20)
+
+    def test_target_never_falls_outside_the_window(self, climate: ClimateConfig) -> None:
+        a = schedule.evaluate(self._gated_item(-60), climate, today=date(2026, 9, 14))
+        assert a.window_start <= a.target <= a.window_end
+
+    def test_target_is_never_in_the_past(self, climate: ClimateConfig) -> None:
+        a = schedule.evaluate(self._gated_item(-12), climate, today=date(2026, 10, 15))
+        assert a.target >= date(2026, 10, 15)
+
+    def test_ungated_items_target_the_window_start(self, climate: ClimateConfig) -> None:
+        a = schedule.evaluate(_item(), climate, today=date(2026, 9, 1))
+        assert a.target == a.window_start

@@ -165,7 +165,25 @@ class TestChunkText:
             chunk_overlap_chars=400,
         )
         assert len(chunks) == 1
-        assert chunks[0].content == "A short paragraph about pre-emergent timing."
+        # Stored content carries a context header naming the source, so the
+        # chunk stays identifiable in isolation. EPA labels say "this
+        # product" throughout — without the header, the chunk holding a
+        # product's rate table contains the product's name nowhere, and
+        # no query can reach it. See `_context_header`.
+        assert chunks[0].content == ("[Source: S]\n\nA short paragraph about pre-emergent timing.")
+
+    def test_every_chunk_names_its_source(self) -> None:
+        """Not just the first — a mid-document chunk is the one that gets lost."""
+        text = "\n\n".join(["y" * 1200] * 4)
+        chunks = chunk_text(
+            text,
+            source_id="bonide-sedge-ender",
+            source_title="Bonide Sedge Ender Concentrate label",
+            chunk_size_chars=1500,
+            chunk_overlap_chars=100,
+        )
+        assert len(chunks) > 1
+        assert all("Bonide Sedge Ender Concentrate label" in c.content for c in chunks)
 
     def test_multiple_paragraphs_split_at_size_limit(self) -> None:
         para = "x" * 1000

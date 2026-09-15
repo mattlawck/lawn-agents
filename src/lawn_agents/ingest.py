@@ -343,6 +343,27 @@ def _split_oversize_paragraph(para: str, max_chars: int) -> list[str]:
     return pieces
 
 
+def _context_header(source_title: str) -> str:
+    """Prefix carrying the document's identity into every one of its chunks.
+
+    Without this, a chunk is anonymous. EPA labels are the worst case and
+    the one that forced the change: they refer to themselves as "this
+    product" throughout, so of the twelve chunks in the Bonide Sedge
+    Ender label, exactly one contained the words "Sedge Ender" — and it
+    was not either of the two holding the application-rate tables.
+
+    The consequence is that no query could reach those rates by product
+    name. Not vector search, because the text has no brand in it to
+    embed; not BM25, because the term is literally absent. The corpus
+    held the answer and the system correctly refused to give it, which
+    looked like a retrieval bug for as long as we treated it as one.
+
+    Prepending the title makes every chunk self-identifying, which is
+    what both retrieval halves actually need.
+    """
+    return f"[Source: {source_title}]\n\n"
+
+
 def _make_chunk(
     content: str,
     source_id: str,
@@ -352,9 +373,13 @@ def _make_chunk(
     fetched_at: datetime | None,
     chunk_idx: int,
 ) -> Chunk:
+    # The header is part of the stored text so it is present for both
+    # embedding and full-text indexing. Chunk ids stay content-addressed
+    # over the *original* body, so re-ingesting unchanged sources still
+    # dedupes rather than duplicating.
     return Chunk(
         id=chunk_id(source_id, page, chunk_idx, content),
-        content=content,
+        content=_context_header(source_title) + content,
         source_id=source_id,
         source_title=source_title,
         url=url,
@@ -423,6 +448,17 @@ def ingest(
             client.close()
 
     report.chunks_total_after = store.count()
+
+    # Refresh the full-text index so newly ingested sources are findable
+    # by exact term (ADR 0011). Skipped silently for stores that don't
+    # support it — the injected fakes in tests, for instance. Without
+    # this a new label is in the corpus but invisible to BM25, which
+    # presents as "the corpus doesn't cover that": the one wrong answer
+    # this system must never give by accident.
+    ensure_fts = getattr(store, "ensure_fts_index", None)
+    if callable(ensure_fts):
+        ensure_fts()
+
     return report
 
 

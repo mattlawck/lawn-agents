@@ -149,6 +149,20 @@ weeds:
     notes: "Coastal SC has the right sandy soil for sandbur infestations. Painful bur-encased seeds."
 
   # --- Sedges ---
+  # Bare "nutsedge" is what people actually type — the specific-species
+  # entries below never matched it, so no alias expansion fired and the
+  # label rate tables stayed out of reach.
+  "Nutsedge":
+    aliases:
+      - "yellow nutsedge"
+      - "purple nutsedge"
+      - "Cyperus esculentus"
+      - "Cyperus rotundus"
+      - "nutgrass"
+      - "sedge"
+    category: sedge
+    notes: "Generic term; yellow is far more common in coastal SC than purple. Control chemistry is shared across both plus green kyllinga."
+
   "Yellow nutsedge":
     aliases:
       - "Cyperus esculentus"

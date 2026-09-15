@@ -71,6 +71,17 @@ class Assessment(NamedTuple):
     """One item's verdict for a given day."""
 
     item: ProgramItem
+
+    target: date
+    """When the action should actually happen.
+
+    Distinct from `window_start`, which only means "start watching". For
+    a gated item this is the expected gate-fire date shifted by the
+    item's `apply_offset_days` — a fall pre-emergent is due ~12 days
+    before soil temperature falls through 70F, not on the day the
+    watching window opens five weeks earlier.
+    """
+
     status: ItemStatus
     gate_status: GateStatus
     window_start: date
@@ -87,11 +98,6 @@ class Assessment(NamedTuple):
             ItemStatus.CLOSING,
         }
 
-    @property
-    def suggested_due(self) -> date:
-        """When a task for this item should fall due."""
-        return max(self.window_start, date.today())
-
 
 CLOSING_SOON_DAYS = 7
 
@@ -106,10 +112,12 @@ def evaluate(
     """Assess one program item against a date and current conditions."""
     start, end = window_dates(item, today)
     gate_status, gate_reason = _evaluate_gate(item.gate, climate, soil)
+    target = _target_date(item, start, end, today, gate_status)
 
     if today < start - timedelta(days=item.lead_days):
         return Assessment(
             item,
+            target,
             ItemStatus.NOT_YET,
             gate_status,
             start,
@@ -120,6 +128,7 @@ def evaluate(
         days = (start - today).days
         return Assessment(
             item,
+            target,
             ItemStatus.APPROACHING,
             gate_status,
             start,
@@ -129,6 +138,7 @@ def evaluate(
     if today > end:
         return Assessment(
             item,
+            target,
             ItemStatus.PASSED,
             gate_status,
             start,
@@ -138,10 +148,13 @@ def evaluate(
 
     # Inside the window.
     if gate_status is GateStatus.UNMET:
-        return Assessment(item, ItemStatus.WAITING_ON_GATE, gate_status, start, end, gate_reason)
+        return Assessment(
+            item, target, ItemStatus.WAITING_ON_GATE, gate_status, start, end, gate_reason
+        )
     if gate_status is GateStatus.UNKNOWN:
         return Assessment(
             item,
+            target,
             ItemStatus.WAITING_ON_GATE,
             gate_status,
             start,
@@ -151,6 +164,7 @@ def evaluate(
     if (end - today).days <= CLOSING_SOON_DAYS:
         return Assessment(
             item,
+            target,
             ItemStatus.CLOSING,
             gate_status,
             start,
@@ -159,6 +173,7 @@ def evaluate(
         )
     return Assessment(
         item,
+        target,
         ItemStatus.READY,
         gate_status,
         start,
@@ -185,6 +200,46 @@ def evaluate_all(
     }
     assessments = [evaluate(i, climate, today=today, soil=soil) for i in items]
     return sorted(assessments, key=lambda a: (order[a.status], a.window_start))
+
+
+def _target_date(
+    item: ProgramItem,
+    start: date,
+    end: date,
+    today: date,
+    gate_status: GateStatus,
+) -> date:
+    """When the action should actually be done.
+
+    The window says when to start paying attention; the gate says when
+    conditions allow. Using `window_start` as a due date conflates them,
+    and for the fall pre-emergent that meant a task due five weeks before
+    soil temperature was anywhere near the threshold — early enough that
+    most of the herbicide's residual would be spent before the weed it
+    targets germinated.
+
+    So: if conditions already say go, go. Otherwise aim at the date the
+    gate is expected to fire, shifted by `apply_offset_days`, and keep
+    the result inside the window and never in the past.
+    """
+    if gate_status is GateStatus.SATISFIED:
+        return max(today, start)
+
+    gate = item.gate
+    expected = gate.expected if gate is not None else None
+    if expected is None:
+        return max(today, start)
+
+    month, day = expected
+    # The window may straddle New Year; anchor the expected date to the
+    # same occurrence the window resolved to.
+    candidate = _safe_date(start.year, month, day)
+    if candidate < start:
+        candidate = _safe_date(start.year + 1, month, day)
+
+    assert gate is not None
+    target = candidate + timedelta(days=gate.apply_offset_days)
+    return max(today, min(max(target, start), end))
 
 
 def window_dates(item: ProgramItem, today: date) -> tuple[date, date]:

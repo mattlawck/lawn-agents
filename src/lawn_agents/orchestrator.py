@@ -141,7 +141,7 @@ def answer(
     conditions = _fetch_conditions(settings.app, wfn, sfn, dfn)
     weed_matches = detect_weeds_in_question(question, settings.weeds)
     brand_matches = detect_brands_in_question(question, settings.chemicals)
-    passages = _retrieve_with_weed_aliases(question, weed_matches, settings.app, rfn)
+    passages = _retrieve_with_bridges(question, weed_matches, brand_matches, settings.app, rfn)
 
     # Tiered relevance check: lexical-overlap miss in the medium band
     # escalates to a cheap LLM gate via the router model. Both bridges
@@ -175,38 +175,6 @@ def answer(
         weed_matches=weed_matches,
         brand_matches=brand_matches,
         synthesizer=synthesizer_chat,
-    )
-
-
-def scheduled_check(
-    settings: Settings,
-    *,
-    router: ChatModel | None = None,
-    synthesizer: ChatModel | None = None,
-    weather_fn: Callable[[AppConfig], WeatherSnapshot | None] | None = None,
-    soil_fn: Callable[[AppConfig], SoilSnapshot | None] | None = None,
-    drought_fn: Callable[[AppConfig], DroughtSnapshot | None] | None = None,
-    retrieve_fn: Callable[[str, AppConfig], list[Passage]] | None = None,
-    research_fn: Callable[[str, AppConfig], list[Passage]] | None = None,
-) -> Recommendation:
-    """Run the weekly scheduled-check workflow.
-
-    For Phase 1, this is `answer(...)` over a canned trigger question.
-    The router's `scheduled-check` intent will specialize the synthesis
-    prompt in a follow-up once we have more data on which actions
-    matter most weekly vs. ad-hoc.
-    """
-    return answer(
-        "Weekly scheduled check: what should I do for my lawn this week "
-        "given current conditions and the time of year?",
-        settings,
-        router=router,
-        synthesizer=synthesizer,
-        weather_fn=weather_fn,
-        soil_fn=soil_fn,
-        drought_fn=drought_fn,
-        retrieve_fn=retrieve_fn,
-        research_fn=research_fn,
     )
 
 
@@ -260,11 +228,19 @@ def _safe_retrieve(
 
 
 RRF_K = 60  # Standard RRF constant from the original Cormack et al. 2009 paper.
+RESERVED_PER_BRIDGE_QUERY = 2
+"""Top hits each bridge query is guaranteed to contribute.
+
+Two rather than one because a label's rate table is rarely its
+best-matching chunk — the brand name appears throughout the document,
+so the top hit is often the front panel or use-restrictions section.
+"""
 
 
-def _retrieve_with_weed_aliases(
+def _retrieve_with_bridges(
     question: str,
-    matched: dict[str, WeedAlias],
+    weed_matches: dict[str, WeedAlias],
+    brand_matches: dict[str, ChemicalBrand],
     config: AppConfig,
     retrieve_fn: Callable[[str, AppConfig], list[Passage]],
 ) -> list[Passage]:
@@ -291,12 +267,46 @@ def _retrieve_with_weed_aliases(
     sees the original question via `<question>`; only retrieval is
     widened.
 
-    When `matched` is empty, this is a single-query path equivalent
-    to `_safe_retrieve` — zero behavior change for non-weed questions.
+    Brands are widened the same way, and for the same reason. ADR 0007's
+    bridge told the *synthesizer* that "Sedge Ender" means sulfentrazone,
+    and (since 2026-09-02) told the relevance check too — but never
+    retrieval. So asking about a product by brand never searched for its
+    chemistry, and a label whose rate table says "sulfentrazone" stayed
+    unreachable behind a question that says "Sedge Ender". Observed
+    2026-09-14: the rate chunk was in the corpus and outside the top-5,
+    and the system refused an answer it had the evidence for.
+
+    KNOWN LIMIT — this does not reach a specific product's rate table.
+    Probed 2026-09-14 against the live corpus: the query "Sedge Ender
+    sulfentrazone application rate per 1000 sq ft Zoysia matrella"
+    returned zero Sedge Ender chunks in its top eight, and instead
+    returned the rate tables of Fusilade II, Recognition and Celsius.
+    BGE-small embeds "application rate per 1000 sq ft" as the dominant
+    signal and every label matches it; a brand name is a rare token
+    carrying almost no semantic weight, so it gets washed out.
+
+    No amount of query phrasing fixes that — it is what dense retrieval
+    is bad at. Exact-term matching (BM25, fused with the vector scores)
+    is the right tool and is not yet implemented, which is why the
+    system still refuses rate questions about products whose labels are
+    sitting in the corpus. Tracked as the open half of ADR 0010.
+
+    When nothing matches, this is a single-query path equivalent to
+    `_safe_retrieve` — zero behavior change for unbridged questions.
     """
     queries: list[str] = [question]
-    for weed in matched.values():
+    for weed in weed_matches.values():
         queries.append(" ".join(weed.aliases))
+    for name, brand in brand_matches.items():
+        actives = " ".join(brand.active_ingredients)
+        # Brand name alongside its chemistry: labels lead with the brand,
+        # extension publications lead with the active ingredient.
+        queries.append(f"{name} {actives}")
+        # A rate-seeking variant ("application rate per 1000 sq ft
+        # <species>") was tried and dropped: under vector search it
+        # embeds closer to EVERY label's rate table than to any one of
+        # them, so it retrieved other products' numbers. Exact-term
+        # matching solves this properly — see ADR 0011.
 
     # If no aliases, skip RRF and return the raw retrieval — preserves
     # exact behavior for non-weed questions.
@@ -307,19 +317,46 @@ def _retrieve_with_weed_aliases(
     # ingest time, so identical content means the same chunk.
     fused_scores: dict[tuple[str, str], float] = {}
     passage_by_key: dict[tuple[str, str], Passage] = {}
+    per_query: list[list[tuple[str, str]]] = []
     for q in queries:
+        ranked_for_query: list[tuple[str, str]] = []
         for rank, p in enumerate(_safe_retrieve(q, config, retrieve_fn), start=1):
             key = (p.source_id, p.content)
+            ranked_for_query.append(key)
             fused_scores[key] = fused_scores.get(key, 0.0) + 1.0 / (RRF_K + rank)
             # Keep the passage instance with the highest raw score, so
             # downstream consumers see a meaningful per-chunk score.
             existing = passage_by_key.get(key)
             if existing is None or p.score > existing.score:
                 passage_by_key[key] = p
+        per_query.append(ranked_for_query)
 
+    # Guarantee each bridge query contributes its best hits before fusing.
+    #
+    # RRF rewards consensus across queries — right for general relevance,
+    # wrong for a question naming two products. A label chunk scores on
+    # the single query that names its product and loses to chunks that
+    # score moderately on four, so on 2026-09-14 a question naming Sedge
+    # Ender returned no Sedge Ender passages at all.
+    #
+    # This only became worth doing once full-text search (ADR 0011) made
+    # each brand query's top hits reliably the *right* product. Reserving
+    # slots under vector-only retrieval just reserved the wrong document.
+    reserved: list[tuple[str, str]] = []
+    for ranked_for_query in per_query[1:]:  # skip the raw question
+        for key in ranked_for_query[:RESERVED_PER_BRIDGE_QUERY]:
+            if key not in reserved:
+                reserved.append(key)
+
+    # Budget is computed AFTER reserving, not before: reserving six slots
+    # into a five-slot result silently drops the last bridge query's
+    # hits, which is the same bug in a new place. `rerank_top_k` is a
+    # floor for the unbridged case, not a ceiling once the question
+    # names several things.
+    top_k = max(config.knowledge.retrieval.rerank_top_k, len(reserved) + 2)
     ranked_keys = sorted(fused_scores.keys(), key=lambda k: fused_scores[k], reverse=True)
-    top_k = config.knowledge.retrieval.rerank_top_k
-    return [passage_by_key[k] for k in ranked_keys[:top_k]]
+    ordered = reserved + [k for k in ranked_keys if k not in reserved]
+    return [passage_by_key[k] for k in ordered[:top_k]]
 
 
 def _bridge_lexical_terms(
