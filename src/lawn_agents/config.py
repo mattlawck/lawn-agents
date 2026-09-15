@@ -224,6 +224,14 @@ class TodoistConfig(BaseModel):
         default="lawn-agents",
         description="Label applied to generated tasks so they're filterable.",
     )
+    state_file: Path = Field(
+        default=Path("data/task_snapshot.json"),
+        description=(
+            "Where the previous run's open tasks are recorded, so their "
+            "absence next run can be read as completion. Derived and "
+            "self-correcting — delete it and the next run rebuilds it."
+        ),
+    )
 
 
 class ResearchConfig(BaseModel):
