@@ -417,3 +417,40 @@ class TestTodoistOutage:
         assert result.skipped_reason is not None
         assert "unreachable" in result.skipped_reason
         assert "unreachable" in watchdog.render(result)
+
+
+class TestRenderHygiene:
+    def test_rationale_truncates_on_a_word_boundary(self) -> None:
+        """Clipping mid-word ('...rather th') reads as a bug to the user."""
+        long = "word " * 200
+        assert watchdog._clip(long, 40).endswith("…")
+        assert "  " not in watchdog._clip("a\n\n  b", 40)
+
+    def test_short_text_is_returned_whole(self) -> None:
+        assert watchdog._clip("brief", 40) == "brief"
+
+    def test_apply_advice_only_appears_when_tasks_were_filed(
+        self, settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """On a run whose only content is a question, it's boilerplate."""
+        _no_soil(monkeypatch)
+        settings = _with_state(settings, tmp_path)
+        created: list[dict[str, Any]] = []
+        rows = [
+            {
+                "id": "g",
+                "content": f"Scout {todoist.marker('scout-grubs-fall', 2026)}",
+                "description": "",
+                "due": {"date": "2026-09-20"},
+                "labels": [],
+            }
+        ]
+        watchdog.run(
+            settings, today=date(2026, 9, 11), client=_fake_client(rows, created), create=False
+        )
+        result = watchdog.run(
+            settings, today=date(2026, 9, 12), client=_fake_client([], created), create=False
+        )
+        rendered = watchdog.render(result)
+        assert "what did you find" in rendered.lower()
+        assert "before applying anything" not in rendered

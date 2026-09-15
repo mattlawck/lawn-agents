@@ -195,8 +195,7 @@ def render(result: WatchResult) -> str:
         for seen, item in result.followups:
             lines.append(f"  • {seen.content}")
             if item.rationale:
-                first = " ".join(item.rationale.split())[:160]
-                lines.append(f"      {first}")
+                lines.append(f"      {_clip(item.rationale, 200)}")
         lines.append(
             "  (Completing an inspection records that you looked, not what "
             "you saw. Tell lawn-agents and it can act on it.)"
@@ -209,5 +208,16 @@ def render(result: WatchResult) -> str:
         lines.extend(f"  • {t.due} — {t.content}" for t in overdue)
         lines.append("")
 
-    lines.append("Ask lawn-agents for the cited recommendation before applying anything.")
-    return "\n".join(lines)
+    # Only relevant when something was actually scheduled. On a run whose
+    # sole content is "what did you find?", it reads as boilerplate.
+    if result.created:
+        lines.append("Ask lawn-agents for the cited recommendation before applying anything.")
+    return "\n".join(lines).rstrip()
+
+
+def _clip(text: str, limit: int) -> str:
+    """Collapse whitespace and truncate on a word boundary."""
+    flat = " ".join(text.split())
+    if len(flat) <= limit:
+        return flat
+    return flat[:limit].rsplit(" ", 1)[0] + "…"
