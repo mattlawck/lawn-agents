@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Final
 
-from lawn_agents import __version__, notify, orchestrator, planner
+from lawn_agents import __version__, notify, orchestrator, planner, watchdog
 from lawn_agents.config import DEFAULT_CONFIG_PATH, Settings
 from lawn_agents.logging import configure as configure_logging
 from lawn_agents.logging import get_logger
@@ -38,7 +38,10 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument(
         "--scheduled",
         action="store_true",
-        help="Run the weekly scheduled check (used by launchd).",
+        help=(
+            "Run the weekly watchdog (used by launchd). Silent unless a "
+            "critical window is approaching or a task has slipped."
+        ),
     )
     mode.add_argument(
         "--plan-month",
@@ -103,7 +106,10 @@ def _dispatch(
     if args.ask:
         rec = orchestrator.answer(args.ask, settings)
     elif args.scheduled:
-        rec = orchestrator.scheduled_check(settings)
+        # The weekly run is a watchdog, not a digest: deterministic, no
+        # LLM, and silent unless something critical is approaching or a
+        # task has slipped. See watchdog.py.
+        return _run_watchdog(settings)
     elif args.plan_month is not None:
         try:
             year, month = _parse_yyyy_mm(args.plan_month)
@@ -126,6 +132,17 @@ def _dispatch(
     for sink in sinks:
         sink.emit(rec)
     return EXIT_RUNTIME if rec.refused else EXIT_OK
+
+
+def _run_watchdog(settings: Settings) -> int:
+    """Weekly unattended check. Prints nothing on a quiet week."""
+    result = watchdog.run(settings)
+    output = watchdog.render(result)
+    if output:
+        print(output)
+    if result.skipped_reason:
+        return EXIT_USAGE
+    return EXIT_OK
 
 
 def _parse_yyyy_mm(raw: str) -> tuple[int, int]:

@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from lawn_agents import notify, orchestrator, planner
+from lawn_agents import notify, orchestrator, planner, watchdog
 from lawn_agents.main import EXIT_OK, EXIT_RUNTIME, EXIT_USAGE, build_parser, cli
 from lawn_agents.models import Recommendation
 
@@ -100,25 +100,52 @@ class TestCliDispatch:
         assert exit_code == EXIT_RUNTIME
         assert emitted[0].refused is True
 
-    def test_scheduled_invokes_scheduled_check(
+    def test_scheduled_runs_the_watchdog(
         self,
         cwd_with_example_config: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        emitted: list[Recommendation] = []
+        """`--scheduled` is a watchdog now, not an LLM digest.
+
+        It renders no `Recommendation` and drives no sink — a quiet week
+        must leave launchd's log empty so anything in it is worth reading.
+        """
         called: dict[str, Any] = {}
 
-        def fake_scheduled(settings: Any) -> Recommendation:
+        def fake_run(settings: Any, **_kw: Any) -> watchdog.WatchResult:
             called["settings"] = settings
-            return _good_rec()
+            return watchdog.WatchResult()
 
-        monkeypatch.setattr(orchestrator, "scheduled_check", fake_scheduled)
-        monkeypatch.setattr(notify, "build_sinks", lambda _c: [_RecordingSink(emitted)])
+        monkeypatch.setattr(watchdog, "run", fake_run)
 
         exit_code = cli(["--config", "config.example.yaml", "--scheduled"])
         assert exit_code == EXIT_OK
         assert "settings" in called
-        assert len(emitted) == 1
+
+    def test_scheduled_is_silent_when_nothing_is_due(
+        self,
+        cwd_with_example_config: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setattr(watchdog, "run", lambda _s, **_k: watchdog.WatchResult())
+        cli(["--config", "config.example.yaml", "--scheduled"])
+        assert capsys.readouterr().out.strip() == ""
+
+    def test_scheduled_reports_misconfiguration(
+        self,
+        cwd_with_example_config: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setattr(
+            watchdog,
+            "run",
+            lambda _s, **_k: watchdog.WatchResult(skipped_reason="TODOIST_API_TOKEN is not set"),
+        )
+        exit_code = cli(["--config", "config.example.yaml", "--scheduled"])
+        assert exit_code == EXIT_USAGE
+        assert "TODOIST_API_TOKEN" in capsys.readouterr().out
 
     def test_plan_month_dispatches_to_planner(
         self,
