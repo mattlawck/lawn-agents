@@ -141,7 +141,7 @@ def answer(
     conditions = _fetch_conditions(settings.app, wfn, sfn, dfn)
     weed_matches = detect_weeds_in_question(question, settings.weeds)
     brand_matches = detect_brands_in_question(question, settings.chemicals)
-    passages = _retrieve_with_weed_aliases(question, weed_matches, settings.app, rfn)
+    passages = _retrieve_with_bridges(question, weed_matches, brand_matches, settings.app, rfn)
 
     # Tiered relevance check: lexical-overlap miss in the medium band
     # escalates to a cheap LLM gate via the router model. Both bridges
@@ -230,9 +230,10 @@ def _safe_retrieve(
 RRF_K = 60  # Standard RRF constant from the original Cormack et al. 2009 paper.
 
 
-def _retrieve_with_weed_aliases(
+def _retrieve_with_bridges(
     question: str,
-    matched: dict[str, WeedAlias],
+    weed_matches: dict[str, WeedAlias],
+    brand_matches: dict[str, ChemicalBrand],
     config: AppConfig,
     retrieve_fn: Callable[[str, AppConfig], list[Passage]],
 ) -> list[Passage]:
@@ -259,12 +260,48 @@ def _retrieve_with_weed_aliases(
     sees the original question via `<question>`; only retrieval is
     widened.
 
-    When `matched` is empty, this is a single-query path equivalent
-    to `_safe_retrieve` — zero behavior change for non-weed questions.
+    Brands are widened the same way, and for the same reason. ADR 0007's
+    bridge told the *synthesizer* that "Sedge Ender" means sulfentrazone,
+    and (since 2026-09-02) told the relevance check too — but never
+    retrieval. So asking about a product by brand never searched for its
+    chemistry, and a label whose rate table says "sulfentrazone" stayed
+    unreachable behind a question that says "Sedge Ender". Observed
+    2026-09-14: the rate chunk was in the corpus and outside the top-5,
+    and the system refused an answer it had the evidence for.
+
+    KNOWN LIMIT — this does not reach a specific product's rate table.
+    Probed 2026-09-14 against the live corpus: the query "Sedge Ender
+    sulfentrazone application rate per 1000 sq ft Zoysia matrella"
+    returned zero Sedge Ender chunks in its top eight, and instead
+    returned the rate tables of Fusilade II, Recognition and Celsius.
+    BGE-small embeds "application rate per 1000 sq ft" as the dominant
+    signal and every label matches it; a brand name is a rare token
+    carrying almost no semantic weight, so it gets washed out.
+
+    No amount of query phrasing fixes that — it is what dense retrieval
+    is bad at. Exact-term matching (BM25, fused with the vector scores)
+    is the right tool and is not yet implemented, which is why the
+    system still refuses rate questions about products whose labels are
+    sitting in the corpus. Tracked as the open half of ADR 0010.
+
+    When nothing matches, this is a single-query path equivalent to
+    `_safe_retrieve` — zero behavior change for unbridged questions.
     """
     queries: list[str] = [question]
-    for weed in matched.values():
+    for weed in weed_matches.values():
         queries.append(" ".join(weed.aliases))
+    for name, brand in brand_matches.items():
+        actives = " ".join(brand.active_ingredients)
+        # Brand name alongside its chemistry: labels lead with the brand,
+        # extension publications lead with the active ingredient.
+        queries.append(f"{name} {actives}")
+        # ...and a rate-seeking variant, because the chunk that actually
+        # answers "how much do I put down" is a dense table of turf
+        # species and fluid ounces. Prose about the weed embeds nowhere
+        # near it. Probed 2026-09-14: the Sedge Ender rate table sat at
+        # rank 11 for the user's question and rank 3 for a query phrased
+        # in the table's own vocabulary.
+        queries.append(f"{name} {actives} application rate per 1000 sq ft {config.subject.species}")
 
     # If no aliases, skip RRF and return the raw retrieval — preserves
     # exact behavior for non-weed questions.
@@ -285,8 +322,8 @@ def _retrieve_with_weed_aliases(
             if existing is None or p.score > existing.score:
                 passage_by_key[key] = p
 
-    ranked_keys = sorted(fused_scores.keys(), key=lambda k: fused_scores[k], reverse=True)
     top_k = config.knowledge.retrieval.rerank_top_k
+    ranked_keys = sorted(fused_scores.keys(), key=lambda k: fused_scores[k], reverse=True)
     return [passage_by_key[k] for k in ranked_keys[:top_k]]
 
 
