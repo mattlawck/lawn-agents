@@ -39,6 +39,16 @@ brands:
     category: insecticide
     notes: "Bayer / Envu; preventive grub control; older neonicotinoid chemistry."
 
+  "Dominion":
+    active_ingredients: ["imidacloprid"]
+    category: insecticide
+    notes: "Control Solutions 'Dominion 2L'; 21.4% imidacloprid (2 lb/gal). Same chemistry as Merit — a neonicotinoid, Group 4A. Preventive white-grub control applied ahead of egg hatch; weak curatively on large grubs. Also labelled as a termiticide, which is why bottle sizes and rates vary widely by use site — read the turf section, not the perimeter section."
+
+  "Talstar P":
+    active_ingredients: ["bifenthrin"]
+    category: insecticide
+    notes: "FMC; 7.9% bifenthrin. Pyrethroid (Group 3A), broad-spectrum CONTACT insecticide. Targets surface-active pests — chinch bugs, armyworms, sod webworms, mole cricket nymphs, fire ants, perimeter pests. Binds tightly to soil and thatch so it does NOT move down to the root zone: it is not a white-grub product, which is a common and expensive mix-up with the preventive grub chemistries. Highly toxic to pollinators and aquatic life; keep off blooming plants and away from drains."
+
   "Dylox":
     active_ingredients: ["trichlorfon"]
     category: insecticide
@@ -77,6 +87,36 @@ brands:
     active_ingredients: ["trifloxysulfuron-sodium"]
     category: herbicide
     notes: "Syngenta; alternate brand name for Recognition (EPA Reg. 100-1658) — same 20.4% trifloxysulfuron-sodium formulation. See the Recognition entry for rates, use limits and tank-mix restrictions."
+
+  "Halo 5WDG":
+    active_ingredients: ["halosulfuron-methyl"]
+    category: herbicide
+    notes: "Albaugh 'Halo 5WDG Select'; EPA Reg. 89442-43. 5% halosulfuron-methyl WDG — a SedgeHammer generic. CONCENTRATION MATTERS: SedgeHammer's base EPA label (81880-1) is 75% halosulfuron; the 5% products (Halo 5WDG, SedgeHammer+) are pre-diluted with surfactant and dosed per pouch. Label rate is 0.5 oz / 13.5 g (one pouch) in 1 gal water per 1,000 sqft. ALS inhibitor (Group 2). Translocates to kill nutlets, so slower than a contact product but durable. Labeled for residential turf and established woody ornamentals in landscape beds."
+
+  "Negate 37WG":
+    active_ingredients: ["rimsulfuron", "metsulfuron-methyl"]
+    category: herbicide
+    notes: "Quali-Pro; 16.67% rimsulfuron + 20% metsulfuron-methyl. Both ALS inhibitors (Group 2) with synergistic activity. Labeled for established Bermuda and Zoysia only — it will damage most other turf. Targets Poa annua plus 35+ grasses and broadleaves; 1.5 oz/acre. Metsulfuron can discolour some zoysia cultivars; check tolerance for Zeon (Zoysia matrella) before broadcasting."
+
+  "Broadloom Sedge Control":
+    active_ingredients: ["bentazon"]
+    category: herbicide
+    notes: "Southern Ag; 44% bentazon, a Basagran generic. Group 6 (photosystem II inhibitor) — a genuinely different mode of action from the ALS sedge products, which makes it the useful rotation partner. CONTACT activity only: it burns foliage and does not translocate to nutlets, so yellow nutsedge regrows from tubers and repeat applications are expected. Labeled for turf and ornamentals; 0.75 oz per 1,000 sqft. Thorough leaf coverage is essential."
+
+  "Hi-Yield 2,4-D":
+    active_ingredients: ["2,4-D"]
+    category: herbicide
+    notes: "Voluntary Purchasing Group; 2,4-D dimethylamine salt. Group 4 (synthetic auxin). Broadleaf only — no activity on sedges or grasses. Zoysia tolerates 2,4-D at label rates but is more sensitive than bermudagrass; avoid during spring green-up and in high heat. Volatility and drift onto ornamentals are the main risks in a mixed landscape."
+
+  "Triad QC":
+    active_ingredients: ["2,4-D", "quinclorac", "dicamba"]
+    category: herbicide
+    notes: "Albaugh 'Triad QC Select'; EPA Reg. 89442-45. 13.29% 2,4-D + 9.79% quinclorac + 1.67% dicamba. NOTE this is a different formulation from plain 'Triad Select', which is 2,4-D + MCPA + dicamba — quinclorac is what adds crabgrass activity. Groups 4 + 4 + 26-ish; quinclorac is the crabgrass component and also hits some broadleaves. Check zoysia tolerance and rate before broadcasting; three-way products are the usual cause of ornamental damage from drift."
+
+  "Spectracide Weed & Grass Killer":
+    active_ingredients: ["diquat dibromide", "fluazifop-P-butyl", "dicamba"]
+    category: herbicide
+    notes: "Spectrum Brands consumer non-selective. NOT GLYPHOSATE — the manufacturer issued a statement specifically clarifying this, and it changes what the product can do. Diquat is a fast CONTACT burndown that does not translocate; fluazifop-P-butyl is the same graminicide as Fusilade II, which warm-season turf including zoysia tolerates. Consequence: on established zoysia this burns the top growth and the plant regrows from rhizomes and stolons. It is not a tool for removing zoysia from beds. Matt's field observation (2026-09-15) matches exactly: it 'only seems to stunt the zoysia for a little bit'. That is the chemistry behaving as labelled, not a weak batch."
 
   # --- Pre-emergent herbicides ---
   "Prodiamine":

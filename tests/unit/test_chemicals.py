@@ -128,6 +128,53 @@ class TestSeededChemicalsFile:
         assert not set(fusilade) & set(recognition)
         assert not set(recognition) & set(sedgehammer)
 
+    def test_halo_is_the_five_percent_formulation(self, chemicals: ChemicalsConfig) -> None:
+        """Halo 5WDG and SedgeHammer share chemistry at 15x different strength.
+
+        Mixing the two up is a real dosing hazard, so the note has to
+        carry the concentration, not just the active ingredient.
+        """
+        brand = chemicals.brands["Halo 5WDG"]
+        assert brand.active_ingredients == ["halosulfuron-methyl"]
+        assert "5%" in (brand.notes or "")
+
+    def test_spectracide_is_not_glyphosate(self, chemicals: ChemicalsConfig) -> None:
+        """The obvious assumption about this product is wrong.
+
+        It is diquat + fluazifop + dicamba. Both halves matter for zoysia:
+        diquat does not translocate, and zoysia tolerates fluazifop — so
+        it burns top growth and the stand regrows from rhizomes.
+        """
+        brand = chemicals.brands["Spectracide Weed & Grass Killer"]
+        assert "glyphosate" not in brand.active_ingredients
+        assert "diquat dibromide" in brand.active_ingredients
+        assert "NOT GLYPHOSATE" in (brand.notes or "")
+
+    def test_talstar_is_not_a_grub_product(self, chemicals: ChemicalsConfig) -> None:
+        """Bifenthrin binds to thatch and never reaches the root zone."""
+        brand = chemicals.brands["Talstar P"]
+        assert brand.active_ingredients == ["bifenthrin"]
+        assert "not a white-grub product" in (brand.notes or "")
+
+    def test_group_two_crowding_is_visible(self, chemicals: ChemicalsConfig) -> None:
+        """Four of the herbicides on hand share one mode of action.
+
+        Celsius, Halo, Recognition and Negate are all ALS inhibitors, so
+        rotating between them is not rotating. The bridge has to carry
+        enough chemistry for the synthesizer to notice.
+        """
+        als_actives = {
+            "halosulfuron-methyl",
+            "trifloxysulfuron-sodium",
+            "thiencarbazone-methyl",
+            "rimsulfuron",
+            "metsulfuron-methyl",
+        }
+        owned = ["Celsius", "Halo 5WDG", "Recognition", "Negate 37WG"]
+        for name in owned:
+            actives = set(chemicals.brands[name].active_ingredients)
+            assert actives & als_actives, f"{name} should expose its ALS chemistry"
+
     def test_seeded_set_covers_all_chemical_categories(self, chemicals: ChemicalsConfig) -> None:
         categories = {b.category.value for b in chemicals.brands.values()}
         assert categories == {"insecticide", "herbicide", "fungicide", "fertilizer"}
