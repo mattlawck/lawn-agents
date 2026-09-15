@@ -54,3 +54,4 @@ coverage.xml
 # --- model / embeddings caches -----------------------------------------
 .cache/
 ~/.cache/huggingface
+data/task_snapshot.json

@@ -74,6 +74,21 @@ def _fake_client(rows: list[dict[str, Any]], created: list[dict[str, Any]]) -> A
     )
 
 
+def _with_state(settings: Settings, tmp_path: Path) -> Settings:
+    """Point the task snapshot at a temp file so runs don't share state."""
+    return settings.model_copy(
+        update={
+            "app": settings.app.model_copy(
+                update={
+                    "todoist": settings.app.todoist.model_copy(
+                        update={"state_file": tmp_path / "snap.json"}
+                    )
+                }
+            )
+        }
+    )
+
+
 def _no_soil(monkeypatch: pytest.MonkeyPatch) -> None:
     from lawn_agents.agents import soiltemp
 
@@ -304,3 +319,101 @@ class TestUnattendedWritesAreCreateOnly:
         assert calls, "the run should have talked to Todoist at all"
         assert not any(method == "DELETE" for method, _ in calls)
         assert not any(path.endswith("/close") for _, path in calls)
+
+
+class TestCompletionDetection:
+    """A completed task is only meaningful against a memory of last run."""
+
+    def _rows(self, *item_ids: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": f"id-{i}",
+                "content": f"Thing {todoist.marker(item_id, 2026)}",
+                "description": "",
+                "due": {"date": "2026-09-20"},
+                "labels": [],
+            }
+            for i, item_id in enumerate(item_ids)
+        ]
+
+    def test_first_run_claims_nothing_was_completed(
+        self, settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _no_soil(monkeypatch)
+        settings = _with_state(settings, tmp_path)
+        created: list[dict[str, Any]] = []
+        result = watchdog.run(
+            settings,
+            today=date(2026, 9, 11),
+            client=_fake_client(self._rows("scout-grubs-fall"), created),
+            create=False,
+        )
+        assert result.completed == []
+
+    def test_monitoring_task_disappearing_asks_what_you_found(
+        self, settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _no_soil(monkeypatch)
+        settings = _with_state(settings, tmp_path)
+        created: list[dict[str, Any]] = []
+
+        # Run one: the scouting task is open.
+        watchdog.run(
+            settings,
+            today=date(2026, 9, 11),
+            client=_fake_client(self._rows("scout-grubs-fall"), created),
+            create=False,
+        )
+        # Run two: it's gone — Matt checked the box.
+        result = watchdog.run(
+            settings, today=date(2026, 9, 12), client=_fake_client([], created), create=False
+        )
+
+        assert [t.item_id for t in result.completed] == ["scout-grubs-fall"]
+        assert [f[0].item_id for f in result.followups] == ["scout-grubs-fall"]
+        rendered = watchdog.render(result)
+        assert "what did you find" in rendered.lower()
+
+    def test_action_task_disappearing_asks_nothing(
+        self, settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Completing an application says everything there is to say."""
+        _no_soil(monkeypatch)
+        settings = _with_state(settings, tmp_path)
+        created: list[dict[str, Any]] = []
+
+        watchdog.run(
+            settings,
+            today=date(2026, 10, 25),
+            client=_fake_client(self._rows("preemergent-fall"), created),
+            create=False,
+        )
+        result = watchdog.run(
+            settings, today=date(2026, 10, 26), client=_fake_client([], created), create=False
+        )
+
+        assert [t.item_id for t in result.completed] == ["preemergent-fall"]
+        assert result.followups == []
+        assert "what did you find" not in watchdog.render(result).lower()
+
+
+class TestTodoistOutage:
+    """A network blip at 7am must not produce a stack trace in a log nobody reads."""
+
+    def test_unreachable_todoist_skips_cleanly(
+        self, settings: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _no_soil(monkeypatch)
+
+        def handler(_r: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("SSL: UNEXPECTED_EOF_WHILE_READING")
+
+        client = todoist.TodoistClient(
+            "tok",
+            "proj-1",
+            client=httpx.Client(base_url=todoist.API_BASE, transport=httpx.MockTransport(handler)),
+        )
+        result = watchdog.run(settings, today=date(2026, 9, 11), client=client)
+        assert result.skipped_reason is not None
+        assert "unreachable" in result.skipped_reason
+        assert "unreachable" in watchdog.render(result)
