@@ -29,9 +29,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from lawn_agents import reconcile, todoist
+from lawn_agents import reconcile, tasklog, todoist
 from lawn_agents.agents import soiltemp
 from lawn_agents.logging import get_logger
 
@@ -54,12 +54,19 @@ class WatchResult:
     created: list[Task] = field(default_factory=list)
     soil: SoilSnapshot | None = None
     skipped_reason: str | None = None
+    completed: list[tasklog.SeenTask] = field(default_factory=list)
+    """Owned tasks open last run and gone now — completed or deleted."""
+
+    followups: list[tuple[tasklog.SeenTask, Any]] = field(default_factory=list)
+    """Disappeared monitoring items whose result has nowhere else to live."""
 
     @property
     def spoke(self) -> bool:
         """True when the run had something worth surfacing."""
         return bool(
-            self.created or (self.plan and (self.plan.overdue_owned or self.plan.overdue_manual))
+            self.created
+            or self.followups
+            or (self.plan and (self.plan.overdue_owned or self.plan.overdue_manual))
         )
 
 
@@ -109,7 +116,20 @@ def run(
         token.get_secret_value(), settings.app.todoist.project_id
     )
     try:
-        tasks = todo.open_tasks()
+        # A transient network failure must not produce a stack trace in a
+        # log nobody reads. The unattended path degrades to a stated
+        # skip and tries again next week, the same way every data
+        # fetcher in this project fails closed.
+        try:
+            tasks = todo.open_tasks()
+        except todoist.TodoistError as exc:
+            log.warning("watchdog.todoist_unavailable", error=str(exc))
+            return WatchResult(soil=soil, skipped_reason=f"Todoist unreachable: {exc}")
+        # Absence is the completion signal, but only against a memory of
+        # what was there before.
+        previous = tasklog.load(settings.app.todoist.state_file)
+        gone = tasklog.disappeared(previous, tasks)
+        followups = tasklog.needing_followup(gone, settings.program.items)
         plan = reconcile.reconcile(
             settings.program.items,
             tasks,
@@ -121,18 +141,30 @@ def run(
             urgent_only=True,
         )
         created: list[Task] = []
-        if create and plan.proposals:
-            created = reconcile.apply(plan, todo, label=settings.app.todoist.label)
+        try:
+            if create and plan.proposals:
+                created = reconcile.apply(plan, todo, label=settings.app.todoist.label)
+        except todoist.TodoistError as exc:
+            # Partial creation is fine: de-duplication is by marker, so
+            # next week fills whatever didn't land.
+            log.warning("watchdog.create_failed", error=str(exc), created=len(created))
+        # Recorded regardless of `create`: the snapshot is an observation
+        # of what was open when we looked, which is equally true on a dry
+        # run. Gating it on writing would mean a dry run silently left the
+        # memory stale and the next real run mis-read the difference.
+        tasklog.save(settings.app.todoist.state_file, [*tasks, *created])
     finally:
         if owns_client:
             todo.close()
 
-    result = WatchResult(plan=plan, created=created, soil=soil)
+    result = WatchResult(plan=plan, created=created, soil=soil, completed=gone, followups=followups)
     log.info(
         "watchdog.done",
         spoke=result.spoke,
         created=len(created),
         overdue=len(plan.overdue_owned) + len(plan.overdue_manual),
+        completed=len(gone),
+        followups=len(followups),
     )
     return result
 
@@ -158,11 +190,34 @@ def render(result: WatchResult) -> str:
         lines.extend(f"  • {t.content}" for t in result.created)
         lines.append("")
 
+    if result.followups:
+        lines.append("You finished these — what did you find?")
+        for seen, item in result.followups:
+            lines.append(f"  • {seen.content}")
+            if item.rationale:
+                lines.append(f"      {_clip(item.rationale, 200)}")
+        lines.append(
+            "  (Completing an inspection records that you looked, not what "
+            "you saw. Tell lawn-agents and it can act on it.)"
+        )
+        lines.append("")
+
     overdue = [*plan.overdue_owned, *plan.overdue_manual]
     if overdue:
         lines.append(f"Past due and still open ({len(overdue)}):")
         lines.extend(f"  • {t.due} — {t.content}" for t in overdue)
         lines.append("")
 
-    lines.append("Ask lawn-agents for the cited recommendation before applying anything.")
-    return "\n".join(lines)
+    # Only relevant when something was actually scheduled. On a run whose
+    # sole content is "what did you find?", it reads as boilerplate.
+    if result.created:
+        lines.append("Ask lawn-agents for the cited recommendation before applying anything.")
+    return "\n".join(lines).rstrip()
+
+
+def _clip(text: str, limit: int) -> str:
+    """Collapse whitespace and truncate on a word boundary."""
+    flat = " ".join(text.split())
+    if len(flat) <= limit:
+        return flat
+    return flat[:limit].rsplit(" ", 1)[0] + "…"
