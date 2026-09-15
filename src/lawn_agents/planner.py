@@ -10,7 +10,7 @@ The never-guess guardrail (ADR 0003) applies — chemical actions still
 require citations. Re-prompt + refuse follows the same pattern as the
 orchestrator.
 
-The planner shares `_fetch_conditions` and `_safe_retrieve` with the
+The planner shares `fetch_conditions` and `safe_retrieve` with the
 orchestrator (via private imports) so condition gathering stays in
 one place; it has its own planner-specific system prompt at
 `prompts/planner.md`.
@@ -23,19 +23,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from lawn_agents import synthesis
+from lawn_agents import bridges, synthesis
 from lawn_agents.agents import drought, knowledge, soiltemp, weather
 from lawn_agents.llm import build_chat_model
 from lawn_agents.logging import get_logger
 from lawn_agents.models import Recommendation
 from lawn_agents.orchestrator import (
-    _brand_bridge_text,
-    _fetch_conditions,
-    _safe_retrieve,
-    _weed_bridge_text,
-    detect_brands_in_question,
-    detect_weeds_in_question,
-    expand_query_with_weed_aliases,
+    fetch_conditions,
+    safe_retrieve,
     thresholds_block,
 )
 
@@ -167,10 +162,10 @@ def _plan(
 
     log.info("planner.start", scope=scope, target=target, query=retrieval_query)
 
-    conditions = _fetch_conditions(settings.app, wfn, sfn, dfn)
-    weed_matches = detect_weeds_in_question(target, settings.weeds)
-    expanded_query = expand_query_with_weed_aliases(retrieval_query, weed_matches)
-    passages = _safe_retrieve(expanded_query, settings.app, rfn)
+    conditions = fetch_conditions(settings.app, wfn, sfn, dfn)
+    weed_matches = bridges.detect_weeds_in_question(target, settings.weeds)
+    expanded_query = bridges.expand_query_with_weed_aliases(retrieval_query, weed_matches)
+    passages = safe_retrieve(expanded_query, settings.app, rfn)
 
     return _synthesize_plan_with_guardrail(
         scope=scope,
@@ -215,7 +210,9 @@ def _synthesize_plan_with_guardrail(
     synthesizer: ChatModel,
 ) -> Recommendation:
     weed_matches = (
-        weed_matches if weed_matches is not None else detect_weeds_in_question(target, weeds)
+        weed_matches
+        if weed_matches is not None
+        else bridges.detect_weeds_in_question(target, weeds)
     )
     user_prompt = _planner_user_prompt(
         scope,
@@ -224,8 +221,8 @@ def _synthesize_plan_with_guardrail(
         passages,
         tiers,
         climate,
-        _brand_bridge_text(detect_brands_in_question(target, chemicals)),
-        _weed_bridge_text(weed_matches),
+        bridges.brand_bridge_text(bridges.detect_brands_in_question(target, chemicals)),
+        bridges.weed_bridge_text(weed_matches),
     )
     return synthesis.synthesize_with_guardrails(
         system=_load_prompt("planner.md"),

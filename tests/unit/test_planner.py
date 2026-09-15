@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from lawn_agents import planner
+from lawn_agents import orchestrator, planner
 from lawn_agents.config import Settings
 from lawn_agents.models import (
     CalendarItem,
@@ -236,7 +236,7 @@ class TestBrandBridgeInjection:
         planner._synthesize_plan_with_guardrail(
             scope="month",
             target="July 2026 — plan around Acelepryn cycle",
-            conditions=planner._fetch_conditions(  # type: ignore[attr-defined]
+            conditions=orchestrator.fetch_conditions(
                 settings.app,
                 lambda _c: _weather_snapshot(),
                 lambda _c: _soil_snapshot(),
@@ -295,7 +295,7 @@ class TestWeedBridgeInjection:
         planner._synthesize_plan_with_guardrail(
             scope="month",
             target="July 2026 — Japanese clover suppression",
-            conditions=planner._fetch_conditions(  # type: ignore[attr-defined]
+            conditions=orchestrator.fetch_conditions(
                 settings.app,
                 lambda _c: _weather_snapshot(),
                 lambda _c: _soil_snapshot(),

@@ -19,12 +19,11 @@ Provider selection (Gemini vs. Anthropic) is decoupled behind the
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from lawn_agents import synthesis
+from lawn_agents import bridges, synthesis
 from lawn_agents.agents import drought, knowledge, research, soiltemp, weather
 from lawn_agents.llm import build_chat_model, parse_router_intent
 from lawn_agents.logging import get_logger
@@ -138,24 +137,24 @@ def answer(
             "Trees, palms, and shrubs are planned for a later phase."
         )
 
-    conditions = _fetch_conditions(settings.app, wfn, sfn, dfn)
-    weed_matches = detect_weeds_in_question(question, settings.weeds)
-    brand_matches = detect_brands_in_question(question, settings.chemicals)
+    conditions = fetch_conditions(settings.app, wfn, sfn, dfn)
+    weed_matches = bridges.detect_weeds_in_question(question, settings.weeds)
+    brand_matches = bridges.detect_brands_in_question(question, settings.chemicals)
     passages = _retrieve_with_bridges(question, weed_matches, brand_matches, settings.app, rfn)
 
     # Tiered relevance check: lexical-overlap miss in the medium band
     # escalates to a cheap LLM gate via the router model. Both bridges
-    # contribute vocabulary — see `_bridge_lexical_terms`.
+    # contribute vocabulary — see `bridges.bridge_lexical_terms`.
     if settings.app.research.enabled and knowledge.is_weak(
         passages,
         settings.app,
         query=question,
-        extra_terms=_bridge_lexical_terms(weed_matches, brand_matches),
+        extra_terms=bridges.bridge_lexical_terms(weed_matches, brand_matches),
         relevance_gate=_make_relevance_gate(router_chat),
     ):
         log.info("orchestrator.retrieval_weak.invoking_research")
         researched = _safe_research(
-            expand_query_with_weed_aliases(question, weed_matches),
+            bridges.expand_query_with_weed_aliases(question, weed_matches),
             settings.app,
             research_call,
         )
@@ -190,12 +189,19 @@ def _load_prompt(name: str) -> str:
     return (PROMPTS_DIR / name).read_text(encoding="utf-8")
 
 
-def _fetch_conditions(
+def fetch_conditions(
     config: AppConfig,
     weather_fn: Callable[[AppConfig], WeatherSnapshot | None],
     soil_fn: Callable[[AppConfig], SoilSnapshot | None],
     drought_fn: Callable[[AppConfig], DroughtSnapshot | None],
 ) -> Conditions:
+    """Gather every live input, failing closed on each independently.
+
+    Shared with the planner. Each fetcher degrades to `None` with the
+    reason logged, so one unreachable endpoint narrows the answer
+    instead of killing the run — the SCAN station alone failed three
+    times in a single afternoon this month.
+    """
     weather_snap = _safe_call(lambda: weather_fn(config), "weather.snapshot")
     soil_snap = _safe_call(lambda: soil_fn(config), "soiltemp.snapshot")
     drought_snap = _safe_call(lambda: drought_fn(config), "drought.snapshot")
@@ -215,11 +221,17 @@ def _safe_call[T](fn: Callable[[], T | None], label: str) -> T | None:
         return None
 
 
-def _safe_retrieve(
+def safe_retrieve(
     question: str,
     config: AppConfig,
     retrieve_fn: Callable[[str, AppConfig], list[Passage]],
 ) -> list[Passage]:
+    """Retrieve passages, degrading to an empty list on failure.
+
+    Shared with the planner. An empty `<sources>` block is a survivable
+    state — the guardrails turn it into a refusal — whereas an exception
+    here would lose the conditions already gathered.
+    """
     try:
         return retrieve_fn(question, config)
     except Exception as exc:
@@ -292,7 +304,7 @@ def _retrieve_with_bridges(
     sitting in the corpus. Tracked as the open half of ADR 0010.
 
     When nothing matches, this is a single-query path equivalent to
-    `_safe_retrieve` — zero behavior change for unbridged questions.
+    `safe_retrieve` — zero behavior change for unbridged questions.
     """
     queries: list[str] = [question]
     for weed in weed_matches.values():
@@ -311,7 +323,7 @@ def _retrieve_with_bridges(
     # If no aliases, skip RRF and return the raw retrieval — preserves
     # exact behavior for non-weed questions.
     if len(queries) == 1:
-        return _safe_retrieve(question, config, retrieve_fn)
+        return safe_retrieve(question, config, retrieve_fn)
 
     # Dedupe by (source_id, content) — chunks are content-addressed at
     # ingest time, so identical content means the same chunk.
@@ -320,7 +332,7 @@ def _retrieve_with_bridges(
     per_query: list[list[tuple[str, str]]] = []
     for q in queries:
         ranked_for_query: list[tuple[str, str]] = []
-        for rank, p in enumerate(_safe_retrieve(q, config, retrieve_fn), start=1):
+        for rank, p in enumerate(safe_retrieve(q, config, retrieve_fn), start=1):
             key = (p.source_id, p.content)
             ranked_for_query.append(key)
             fused_scores[key] = fused_scores.get(key, 0.0) + 1.0 / (RRF_K + rank)
@@ -357,39 +369,6 @@ def _retrieve_with_bridges(
     ranked_keys = sorted(fused_scores.keys(), key=lambda k: fused_scores[k], reverse=True)
     ordered = reserved + [k for k in ranked_keys if k not in reserved]
     return [passage_by_key[k] for k in ordered[:top_k]]
-
-
-def _bridge_lexical_terms(
-    weed_matches: dict[str, WeedAlias],
-    brand_matches: dict[str, ChemicalBrand],
-) -> list[str]:
-    """Vocabulary the bridges add to the question, for `is_weak`'s lexical check.
-
-    Both bridges exist because the user's vocabulary and the corpus's
-    vocabulary differ: the user says "GrubX" or "Japanese clover", the
-    extension factsheet says "chlorantraniliprole" or "annual
-    lespedeza". The synthesizer gets told about both mappings via
-    `<brand_bridge>` / `<weed_bridge>`, but `knowledge.is_weak` runs
-    *before* synthesis and only sees the raw question.
-
-    Without this, the lexical-overlap check compares the user's words
-    against a passage that never uses them, misses, and escalates to
-    the LLM relevance gate — which is equally blind and returns "not
-    relevant." Observed live on 2026-09-02: "Is it too late to treat
-    with GrubX?" retrieved the Clemson white-grub factsheet at 0.644
-    (medium band), was marked weak, fired a pointless research call,
-    and then the synthesizer answered correctly from that very passage.
-
-    Feeding both bridges' terms in as `extra_terms` closes the gap. The
-    weed side was already wired (ADR 0008); the brand side (ADR 0007)
-    was not.
-    """
-    terms: list[str] = []
-    for weed in weed_matches.values():
-        terms.extend(weed.aliases)
-    for brand in brand_matches.values():
-        terms.extend(brand.active_ingredients)
-    return terms
 
 
 _RELEVANCE_GATE_SYSTEM = (
@@ -460,10 +439,12 @@ def _synthesize_with_guardrail(
     brand_matches = (
         brand_matches
         if brand_matches is not None
-        else detect_brands_in_question(question, chemicals)
+        else bridges.detect_brands_in_question(question, chemicals)
     )
     weed_matches = (
-        weed_matches if weed_matches is not None else detect_weeds_in_question(question, weeds)
+        weed_matches
+        if weed_matches is not None
+        else bridges.detect_weeds_in_question(question, weeds)
     )
     user_prompt = _synthesizer_user_prompt(
         question,
@@ -472,8 +453,8 @@ def _synthesize_with_guardrail(
         passages,
         tiers,
         climate,
-        _brand_bridge_text(brand_matches),
-        _weed_bridge_text(weed_matches),
+        bridges.brand_bridge_text(brand_matches),
+        bridges.weed_bridge_text(weed_matches),
     )
     return synthesis.synthesize_with_guardrails(
         system=_load_prompt("synthesizer.md"),
@@ -550,107 +531,6 @@ def _synthesizer_user_prompt(
         f"<question>{question}</question>{bridge_block}\n\n"
         f"<sources>\n{knowledge.format_sources(passages, tiers)}\n</sources>"
     )
-
-
-def detect_brands_in_question(
-    question: str, chemicals: ChemicalsConfig
-) -> dict[str, ChemicalBrand]:
-    """Return chemical brands from `chemicals.brands` mentioned in `question`.
-
-    Case-insensitive, word-boundary match. Brand names containing spaces
-    are matched as exact phrases. Used by the orchestrator + planner to
-    inject a brand → active-ingredient bridge into the synthesizer
-    prompt; see ADR 0007.
-    """
-    matched: dict[str, ChemicalBrand] = {}
-    q_lower = question.lower()
-    for name, brand in chemicals.brands.items():
-        pattern = r"\b" + re.escape(name.lower()) + r"\b"
-        if re.search(pattern, q_lower):
-            matched[name] = brand
-    return matched
-
-
-def _brand_bridge_text(matched: dict[str, ChemicalBrand]) -> str:
-    if not matched:
-        return ""
-    lines = [
-        "<brand_bridge>",
-        (
-            "The question mentions one or more product brands. Each brand's "
-            "active ingredient(s) are listed below. Passages in <sources> "
-            "that discuss an active ingredient apply to the corresponding "
-            "brand. Cite the passage, not the bridge."
-        ),
-    ]
-    for name, brand in sorted(matched.items()):
-        ais = ", ".join(brand.active_ingredients)
-        line = f"- {name} ({brand.category.value}): active ingredient(s): {ais}."
-        if brand.notes:
-            line += f" {brand.notes}"
-        lines.append(line)
-    lines.append("</brand_bridge>")
-    return "\n".join(lines)
-
-
-def detect_weeds_in_question(question: str, weeds: WeedsConfig) -> dict[str, WeedAlias]:
-    """Return weed common names from `weeds.weeds` mentioned in `question`.
-
-    Case-insensitive, word-boundary match. Names containing spaces are
-    matched as exact phrases. Used by the orchestrator + planner to
-    inject a weed common-name → alias bridge into the synthesizer
-    prompt; see ADR 0008.
-    """
-    matched: dict[str, WeedAlias] = {}
-    q_lower = question.lower()
-    for name, weed in weeds.weeds.items():
-        pattern = r"\b" + re.escape(name.lower()) + r"\b"
-        if re.search(pattern, q_lower):
-            matched[name] = weed
-    return matched
-
-
-def expand_query_with_weed_aliases(question: str, matched: dict[str, WeedAlias]) -> str:
-    """Append weed aliases to the retrieval query so the label surfaces.
-
-    The bridge tells the *synthesizer* about common→technical name
-    aliases, but retrieval still embeds the raw question. BGE-small
-    similarity between "Japanese clover" and "Annual lespedeza" is
-    weak, so the Bayer Celsius WG label (which uses the older form) is
-    never retrieved on the homeowner phrasing. Appending the aliases
-    to the retrieval query brings the label into top-k. The
-    synthesizer still sees the original question via the `<question>`
-    block — only the retrieval path is widened.
-    """
-    if not matched:
-        return question
-    extra_terms: list[str] = []
-    for weed in matched.values():
-        extra_terms.extend(weed.aliases)
-    return f"{question} {' '.join(extra_terms)}"
-
-
-def _weed_bridge_text(matched: dict[str, WeedAlias]) -> str:
-    if not matched:
-        return ""
-    lines = [
-        "<weed_bridge>",
-        (
-            "The question mentions one or more weed common names. Each weed's "
-            "scientific names and label-form aliases are listed below. "
-            "Passages in <sources> that discuss any alias (e.g., scientific "
-            "name or older common name) apply to the user's question. Cite "
-            "the passage, not the bridge."
-        ),
-    ]
-    for name, weed in sorted(matched.items()):
-        aliases = ", ".join(weed.aliases)
-        line = f"- {name} ({weed.category.value}): also called {aliases}."
-        if weed.notes:
-            line += f" {weed.notes}"
-        lines.append(line)
-    lines.append("</weed_bridge>")
-    return "\n".join(lines)
 
 
 def _refusal(reason: str) -> Recommendation:

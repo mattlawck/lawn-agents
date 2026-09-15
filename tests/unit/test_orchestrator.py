@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from lawn_agents import orchestrator
+from lawn_agents import bridges, orchestrator
 from lawn_agents.config import Settings
 from lawn_agents.models import (
     CalendarItem,
@@ -620,13 +620,13 @@ class TestBridgeLexicalTerms:
         )
 
     def test_brand_active_ingredients_are_included(self, settings: Settings) -> None:
-        brands = orchestrator.detect_brands_in_question("treat with GrubX?", settings.chemicals)
-        terms = orchestrator._bridge_lexical_terms({}, brands)
+        brands = bridges.detect_brands_in_question("treat with GrubX?", settings.chemicals)
+        terms = bridges.bridge_lexical_terms({}, brands)
         assert "chlorantraniliprole" in terms
 
     def test_weed_aliases_are_still_included(self, settings: Settings) -> None:
-        weeds = orchestrator.detect_weeds_in_question("I have Japanese clover", settings.weeds)
-        terms = orchestrator._bridge_lexical_terms(weeds, {})
+        weeds = bridges.detect_weeds_in_question("I have Japanese clover", settings.weeds)
+        terms = bridges.bridge_lexical_terms(weeds, {})
         assert "annual lespedeza" in terms
 
     def test_branded_question_does_not_fire_research(self, settings: Settings) -> None:
