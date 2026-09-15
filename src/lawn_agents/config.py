@@ -81,10 +81,21 @@ class RetrievalConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # `top_k_vector` / `top_k_bm25` lived here since Phase 1 describing a
-    # hybrid retriever that was never built — knowledge.py is pure vector.
-    # Removed rather than left as config that advertises a capability the
-    # code doesn't have. They come back with the implementation.
+    # Hybrid retrieval (ADR 0011). These two knobs existed since Phase 1
+    # describing a retriever that did not exist, were removed in the
+    # September audit as config advertising a capability the code lacked,
+    # and are back now that it does.
+    top_k_vector: int = Field(
+        default=8, ge=1, le=50, description="Candidates drawn from vector search."
+    )
+    top_k_bm25: int = Field(
+        default=8,
+        ge=0,
+        le=50,
+        description=(
+            "Candidates drawn from full-text search. Set 0 to disable and fall back to vector-only."
+        ),
+    )
     rerank_top_k: int = 5
     # Tiered relevance check (PR-tba):
     #   score < weak    → weak (research subagent fires)
@@ -194,6 +205,27 @@ class GroundingConfig(BaseModel):
     )
 
 
+class TodoistConfig(BaseModel):
+    """Todoist is the task store and, in practice, the state layer.
+
+    Tasks are completed when the work is done, so the open-task list is
+    the whole picture: an overdue open task means it didn't happen, and a
+    task's absence means it did. `TODOIST_API_TOKEN` lives in `.env`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    project_id: str | None = Field(
+        default=None,
+        description="Todoist project id that generated tasks are written to.",
+    )
+    label: str = Field(
+        default="lawn-agents",
+        description="Label applied to generated tasks so they're filterable.",
+    )
+
+
 class ResearchConfig(BaseModel):
     """Self-extending RAG (ADR 0005) configuration."""
 
@@ -253,6 +285,7 @@ class AppConfig(BaseModel):
     knowledge: KnowledgeConfig
     research: ResearchConfig
     grounding: GroundingConfig = Field(default_factory=GroundingConfig)
+    todoist: TodoistConfig = Field(default_factory=TodoistConfig)
     seed_urls: list[str] = Field(default_factory=list)
     chemicals_file: Path = Field(default=DEFAULT_CHEMICALS_PATH)
     weeds_file: Path = Field(default=DEFAULT_WEEDS_PATH)
@@ -279,6 +312,7 @@ class Settings(BaseSettings):
 
     gemini_api_key: SecretStr | None = Field(default=None, alias="GEMINI_API_KEY")
     anthropic_api_key: SecretStr | None = Field(default=None, alias="ANTHROPIC_API_KEY")
+    todoist_api_token: SecretStr | None = Field(default=None, alias="TODOIST_API_TOKEN")
     nws_user_agent: str | None = Field(default=None, alias="NWS_USER_AGENT")
     lawn_agents_index_dir: Path | None = Field(default=None, alias="LAWN_AGENTS_INDEX_DIR")
 
