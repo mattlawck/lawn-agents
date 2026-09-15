@@ -59,6 +59,17 @@ knowledge:
   chunk_size_tokens: 700
   chunk_overlap_tokens: 100
   retrieval:
+    # Hybrid retrieval (ADR 0011). Vector search finds passages that
+    # *mean* the same thing; full-text finds exact terms. Neither is
+    # sufficient alone — dense search cannot find a product by name
+    # (brand names are rare tokens with little semantic weight), and
+    # full-text cannot bridge "Japanese clover" to "annual lespedeza".
+    # Results are fused by Reciprocal Rank Fusion.
+    top_k_vector: 8
+    top_k_bm25: 8      # set 0 to disable full-text and go vector-only
+    # Final budget. A floor, not a ceiling: a question naming several
+    # products widens the search, and each bridge query is guaranteed
+    # to contribute its best hits.
     rerank_top_k: 5
     # If best reranked score is below this floor, knowledge.py signals
     # "weak result" and the orchestrator may invoke the research subagent.

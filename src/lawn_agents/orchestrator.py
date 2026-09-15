@@ -228,6 +228,13 @@ def _safe_retrieve(
 
 
 RRF_K = 60  # Standard RRF constant from the original Cormack et al. 2009 paper.
+RESERVED_PER_BRIDGE_QUERY = 2
+"""Top hits each bridge query is guaranteed to contribute.
+
+Two rather than one because a label's rate table is rarely its
+best-matching chunk — the brand name appears throughout the document,
+so the top hit is often the front panel or use-restrictions section.
+"""
 
 
 def _retrieve_with_bridges(
@@ -295,13 +302,11 @@ def _retrieve_with_bridges(
         # Brand name alongside its chemistry: labels lead with the brand,
         # extension publications lead with the active ingredient.
         queries.append(f"{name} {actives}")
-        # ...and a rate-seeking variant, because the chunk that actually
-        # answers "how much do I put down" is a dense table of turf
-        # species and fluid ounces. Prose about the weed embeds nowhere
-        # near it. Probed 2026-09-14: the Sedge Ender rate table sat at
-        # rank 11 for the user's question and rank 3 for a query phrased
-        # in the table's own vocabulary.
-        queries.append(f"{name} {actives} application rate per 1000 sq ft {config.subject.species}")
+        # A rate-seeking variant ("application rate per 1000 sq ft
+        # <species>") was tried and dropped: under vector search it
+        # embeds closer to EVERY label's rate table than to any one of
+        # them, so it retrieved other products' numbers. Exact-term
+        # matching solves this properly — see ADR 0011.
 
     # If no aliases, skip RRF and return the raw retrieval — preserves
     # exact behavior for non-weed questions.
@@ -312,19 +317,46 @@ def _retrieve_with_bridges(
     # ingest time, so identical content means the same chunk.
     fused_scores: dict[tuple[str, str], float] = {}
     passage_by_key: dict[tuple[str, str], Passage] = {}
+    per_query: list[list[tuple[str, str]]] = []
     for q in queries:
+        ranked_for_query: list[tuple[str, str]] = []
         for rank, p in enumerate(_safe_retrieve(q, config, retrieve_fn), start=1):
             key = (p.source_id, p.content)
+            ranked_for_query.append(key)
             fused_scores[key] = fused_scores.get(key, 0.0) + 1.0 / (RRF_K + rank)
             # Keep the passage instance with the highest raw score, so
             # downstream consumers see a meaningful per-chunk score.
             existing = passage_by_key.get(key)
             if existing is None or p.score > existing.score:
                 passage_by_key[key] = p
+        per_query.append(ranked_for_query)
 
-    top_k = config.knowledge.retrieval.rerank_top_k
+    # Guarantee each bridge query contributes its best hits before fusing.
+    #
+    # RRF rewards consensus across queries — right for general relevance,
+    # wrong for a question naming two products. A label chunk scores on
+    # the single query that names its product and loses to chunks that
+    # score moderately on four, so on 2026-09-14 a question naming Sedge
+    # Ender returned no Sedge Ender passages at all.
+    #
+    # This only became worth doing once full-text search (ADR 0011) made
+    # each brand query's top hits reliably the *right* product. Reserving
+    # slots under vector-only retrieval just reserved the wrong document.
+    reserved: list[tuple[str, str]] = []
+    for ranked_for_query in per_query[1:]:  # skip the raw question
+        for key in ranked_for_query[:RESERVED_PER_BRIDGE_QUERY]:
+            if key not in reserved:
+                reserved.append(key)
+
+    # Budget is computed AFTER reserving, not before: reserving six slots
+    # into a five-slot result silently drops the last bridge query's
+    # hits, which is the same bug in a new place. `rerank_top_k` is a
+    # floor for the unbridged case, not a ceiling once the question
+    # names several things.
+    top_k = max(config.knowledge.retrieval.rerank_top_k, len(reserved) + 2)
     ranked_keys = sorted(fused_scores.keys(), key=lambda k: fused_scores[k], reverse=True)
-    return [passage_by_key[k] for k in ranked_keys[:top_k]]
+    ordered = reserved + [k for k in ranked_keys if k not in reserved]
+    return [passage_by_key[k] for k in ordered[:top_k]]
 
 
 def _bridge_lexical_terms(

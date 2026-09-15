@@ -81,10 +81,21 @@ class RetrievalConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # `top_k_vector` / `top_k_bm25` lived here since Phase 1 describing a
-    # hybrid retriever that was never built — knowledge.py is pure vector.
-    # Removed rather than left as config that advertises a capability the
-    # code doesn't have. They come back with the implementation.
+    # Hybrid retrieval (ADR 0011). These two knobs existed since Phase 1
+    # describing a retriever that did not exist, were removed in the
+    # September audit as config advertising a capability the code lacked,
+    # and are back now that it does.
+    top_k_vector: int = Field(
+        default=8, ge=1, le=50, description="Candidates drawn from vector search."
+    )
+    top_k_bm25: int = Field(
+        default=8,
+        ge=0,
+        le=50,
+        description=(
+            "Candidates drawn from full-text search. Set 0 to disable and fall back to vector-only."
+        ),
+    )
     rerank_top_k: int = 5
     # Tiered relevance check (PR-tba):
     #   score < weak    → weak (research subagent fires)
