@@ -158,9 +158,9 @@ def _injectables(
     *,
     router: FakeChatModel | None = None,
     synthesizer: FakeChatModel | None = None,
-    weather_snap: WeatherSnapshot | None | object = ...,
-    soil_snap: SoilSnapshot | None | object = ...,
-    drought_snap: DroughtSnapshot | None | object = ...,
+    weather_snap: WeatherSnapshot | object | None = ...,
+    soil_snap: SoilSnapshot | object | None = ...,
+    drought_snap: DroughtSnapshot | object | None = ...,
     passages: list[Passage] | None = None,
     research_passages: list[Passage] | None = None,
 ) -> dict[str, Any]:
