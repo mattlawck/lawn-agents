@@ -30,8 +30,13 @@ tokens, so it can run on every synthesis and in CI:
   passage it claims to quote. Enforces synthesizer rule 5 ("cite verbatim
   or near-verbatim"), which until now was prompt-only.
 - **Chemical-term grounding** — any brand or active ingredient from the
-  bridge vocabulary that the action names must appear in at least one cited
-  passage. Catches the fabricated-ingredient case directly.
+  bridge vocabulary that the action names must be *evidenced* by at least
+  one cited passage. Catches the fabricated-ingredient case directly. An
+  active ingredient evidences only itself; a brand is evidenced by its own
+  name **or by any of its active ingredients**, because extension sources
+  discuss chemistry by active ingredient and not by retail brand. Requiring
+  the brand literally made this check contradict the ADR 0007 bridge it sits
+  behind — see `_chemical_vocabulary`.
 
 Scope limit, stated honestly: these checks verify that named chemistry is
 *present in the cited source*. They do not verify that the source pairs
@@ -142,7 +147,7 @@ def format_failures(errors: Iterable[GroundingError]) -> str:
 def _verify_item(
     item: CalendarItem,
     by_source: dict[str, str],
-    vocabulary: frozenset[str],
+    vocabulary: dict[str, frozenset[str]],
     config: GroundingConfig,
 ) -> list[GroundingError]:
     errors: list[GroundingError] = []
@@ -194,13 +199,19 @@ def _verify_snippet(
 def _verify_chemical_terms(
     item: CalendarItem,
     cited_text: str,
-    vocabulary: frozenset[str],
+    vocabulary: dict[str, frozenset[str]],
 ) -> list[GroundingError]:
-    """Every chemical name the action uses must appear in a cited passage."""
+    """Every chemical the action names must be evidenced by a cited passage.
+
+    A brand is evidenced by its own name *or* by any of its active
+    ingredients — see `_chemical_vocabulary` for why the latter matters.
+    """
     action_lower = item.action.lower()
     cited_lower = cited_text.lower()
     missing = sorted(
-        term for term in vocabulary if term in action_lower and term not in cited_lower
+        term
+        for term, supports in vocabulary.items()
+        if term in action_lower and not any(s in cited_lower for s in supports)
     )
     return [
         GroundingError(
@@ -222,20 +233,41 @@ def _passages_by_source(passages: list[Passage]) -> dict[str, str]:
     return merged
 
 
-def _chemical_vocabulary(chemicals: ChemicalsConfig) -> frozenset[str]:
-    """Brand names + active ingredients, lowercased.
+def _chemical_vocabulary(chemicals: ChemicalsConfig) -> dict[str, frozenset[str]]:
+    """Map each claim term to the terms that can evidence it in a source.
 
     Deliberately excludes the `notes` prose: notes exist to *explain*
     chemistry to the synthesizer and mention neighbouring products, so
     treating them as claim vocabulary would fire on words the model was
     never asserting.
+
+    An active ingredient evidences only itself. **A brand is also
+    evidenced by any of its active ingredients**, because extension
+    publications discuss chemistry by active ingredient and not by retail
+    brand — the premise the ADR 0007 bridge exists to bridge.
+
+    Without that, the two mechanisms contradict each other: the bridge
+    teaches the synthesizer that "GrubX" means chlorantraniliprole so it
+    can answer a brand question, and this check then rejects the answer
+    because the extension factsheet supporting it never says "GrubX".
+    Clemson's white-grub factsheet writes the retail name as "Grub Ex"
+    with a space, so even a literal match could not have succeeded. The
+    result was an intermittent refusal on a question the corpus fully
+    answers, whenever the model helpfully named the brand it was asked
+    about.
+
+    Requiring the *chemistry* to be present keeps the check's real
+    purpose — a fabricated active ingredient is still caught, because no
+    passage will contain it.
     """
-    terms: set[str] = set()
+    evidence: dict[str, set[str]] = {}
     for name, brand in chemicals.brands.items():
-        terms.add(name.lower())
-        terms.update(ai.lower() for ai in brand.active_ingredients)
+        ingredients = {ai.lower() for ai in brand.active_ingredients}
+        evidence.setdefault(name.lower(), set()).update({name.lower(), *ingredients})
+        for ai in ingredients:
+            evidence.setdefault(ai, set()).add(ai)
     # Very short tokens ("3336") would match inside unrelated numbers.
-    return frozenset(t for t in terms if len(t) >= 5)
+    return {term: frozenset(supports) for term, supports in evidence.items() if len(term) >= 5}
 
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
