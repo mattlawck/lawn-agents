@@ -170,6 +170,79 @@ class TestFabricatedIngredient:
         assert any(e.kind == "chemical_term" and "recognition" in e.detail for e in errors)
 
 
+class TestBrandEvidencedByItsChemistry:
+    """The GrubX refusal: this check once contradicted the ADR 0007 bridge.
+
+    Observed 2026-09-21. Asked whether to apply GrubX for grubs found in
+    mid-September, the system refused. Retrieval was fine — both Clemson
+    chunks naming chlorantraniliprole reached `<sources>`. The model wrote
+    "Chlorantraniliprole (found in products like GrubX and Acelepryn)" and
+    this check rejected it because the word "GrubX" is absent from a
+    Clemson factsheet.
+
+    It was always going to be absent. Extension publications discuss
+    chemistry by active ingredient, which is the stated premise of the
+    bridge; Clemson writes the retail name as "Grub Ex" with a space, so
+    even a literal match could not have matched. The bridge existed to stop
+    refusals on brand names and this check reintroduced them one layer down.
+    """
+
+    @pytest.fixture
+    def grub_chemicals(self) -> ChemicalsConfig:
+        return ChemicalsConfig(
+            brands={
+                "GrubX": ChemicalBrand(
+                    active_ingredients=["chlorantraniliprole"],
+                    category=ChemicalCategory.INSECTICIDE,
+                )
+            }
+        )
+
+    def test_brand_is_grounded_by_its_active_ingredient(
+        self, grub_chemicals: ChemicalsConfig, config: GroundingConfig
+    ) -> None:
+        passage = _passage(
+            source_id="clemson-grubs",
+            content=(
+                "Products that contain the active ingredients imidacloprid, "
+                "chlorantraniliprole, clothianidin, and trichlorfon are labelled "
+                "for grub control in residential turfgrass."
+            ),
+        )
+        item = CalendarItem(
+            category=ChemicalCategory.INSECTICIDE,
+            action="Chlorantraniliprole (found in products like GrubX) is labelled for grubs.",
+            citations=[
+                _citation(
+                    source_id="clemson-grubs",
+                    snippet="chlorantraniliprole, clothianidin, and trichlorfon are labelled",
+                )
+            ],
+        )
+        assert grounding.verify(_rec(item), [passage], grub_chemicals, config) == []
+
+    def test_brand_whose_chemistry_is_absent_is_still_flagged(
+        self, grub_chemicals: ChemicalsConfig, config: GroundingConfig
+    ) -> None:
+        """Loosening the brand rule must not weaken the fabrication check."""
+        passage = _passage(
+            source_id="clemson-grubs",
+            content="Beneficial nematodes must be applied according to label directions.",
+        )
+        item = CalendarItem(
+            category=ChemicalCategory.INSECTICIDE,
+            action="Apply GrubX for curative grub control.",
+            citations=[
+                _citation(
+                    source_id="clemson-grubs",
+                    snippet="Beneficial nematodes must be applied according to label directions.",
+                )
+            ],
+        )
+        errors = grounding.verify(_rec(item), [passage], grub_chemicals, config)
+        assert any(e.kind == "chemical_term" and "grubx" in e.detail for e in errors)
+
+
 class TestProvenance:
     def test_citation_to_a_source_not_in_sources_is_flagged(
         self, chemicals: ChemicalsConfig, config: GroundingConfig
