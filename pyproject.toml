@@ -81,6 +81,16 @@ Issues = "https://github.com/mattlawck/lawn-agents/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["src/lawn_agents"]
 
+# --- uv ------------------------------------------------------------------
+
+[tool.uv]
+# fastembed (through 0.9.0) caps pillow<13, but the fixes for nine
+# Dependabot advisories (one critical) ship only in Pillow 13.0.0. Pillow
+# is here solely as fastembed's dependency for *image* embeddings; this
+# project embeds text only (bge-small) and never imports PIL. Drop this
+# override once fastembed lifts its cap.
+override-dependencies = ["pillow>=13.0.0"]
+
 # --- ruff ----------------------------------------------------------------
 
 [tool.ruff]

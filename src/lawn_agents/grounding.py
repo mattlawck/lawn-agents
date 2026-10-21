@@ -154,7 +154,7 @@ def _verify_item(
     cited_text_parts: list[str] = []
 
     for citation in item.citations:
-        passage_text = by_source.get(citation.source_id)
+        passage_text = by_source.get(_source_key(citation.source_id))
         if passage_text is None:
             errors.append(
                 GroundingError(
@@ -226,11 +226,34 @@ def _verify_chemical_terms(
 
 
 def _passages_by_source(passages: list[Passage]) -> dict[str, str]:
-    """Merge passage content per source_id — a source may span several chunks."""
+    """Merge passage content per source — a source may span several chunks.
+
+    Keyed by `_source_key`, so the provenance lookup is insensitive to how
+    the model spells an id it was genuinely shown.
+    """
     merged: dict[str, str] = {}
     for p in passages:
-        merged[p.source_id] = f"{merged.get(p.source_id, '')} {p.content}".strip()
+        key = _source_key(p.source_id)
+        merged[key] = f"{merged.get(key, '')} {p.content}".strip()
     return merged
+
+
+_SOURCE_PREFIX_RE = re.compile(r"^(?:url:|pdf:)?(?:https?://)?")
+
+
+def _source_key(source_id: str) -> str:
+    """Normalize a source id to the part that identifies the document.
+
+    Ingested ids carry a kind prefix and, for URLs, a scheme
+    (``url:https://info.supersod.com/...``), while rendered citations show
+    the bare ``info.supersod.com/...`` form. The synthesizer sees both and
+    sometimes cites the bare one. Exact matching turned that spelling
+    difference into a provenance failure — on 2026-10-21 a bed-prep
+    question was refused twice for citing a Super-Sod page that *was* in
+    `<sources>`. An id naming no retrieved document still matches nothing,
+    so invented sources are caught exactly as before.
+    """
+    return _SOURCE_PREFIX_RE.sub("", source_id.strip()).rstrip("/").lower()
 
 
 def _chemical_vocabulary(chemicals: ChemicalsConfig) -> dict[str, frozenset[str]]:
