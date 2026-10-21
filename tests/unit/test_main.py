@@ -210,6 +210,38 @@ class TestCliDispatch:
         err = capsys.readouterr().err
         assert "config" in err.lower()
 
+    @pytest.mark.parametrize("escape", ["../outside.yaml", "/etc/hosts"])
+    def test_config_outside_working_directory_is_rejected(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        escape: str,
+    ) -> None:
+        # The escape target exists, so rejection can't be a not-found error.
+        (tmp_path / "outside.yaml").write_text("{}", encoding="utf-8")
+        work = tmp_path / "work"
+        work.mkdir()
+        monkeypatch.chdir(work)
+        exit_code = cli(["--config", escape, "--ask", "hi"])
+        assert exit_code == EXIT_USAGE
+        assert "outside the working directory" in capsys.readouterr().err
+
+    def test_symlink_escaping_working_directory_is_rejected(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        (tmp_path / "outside.yaml").write_text("{}", encoding="utf-8")
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "config.yaml").symlink_to(tmp_path / "outside.yaml")
+        monkeypatch.chdir(work)
+        exit_code = cli(["--config", "config.yaml", "--ask", "hi"])
+        assert exit_code == EXIT_USAGE
+        assert "outside the working directory" in capsys.readouterr().err
+
 
 # --- helpers --------------------------------------------------------------
 
