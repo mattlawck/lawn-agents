@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Final
@@ -64,6 +65,28 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _confined_to_cwd(path: Path) -> Path:
+    """Resolve `path` and reject it unless it sits inside the working directory.
+
+    The CLI runs as the invoking user, so this is not a privilege boundary
+    today. It exists for the case where something other than a human
+    composes the arguments — an LLM agent driving the CLI could otherwise
+    be steered into `--config ../../.ssh/id_rsa`, and a Pydantic error
+    would echo part of that file. Written in SonarCloud's documented
+    sanitizer shape (realpath + separator-terminated prefix) so the taint
+    analysis behind rule S8707 recognizes it.
+
+    Raises:
+        ValueError: If the resolved path escapes the working directory.
+    """
+    resolved = os.path.realpath(path)
+    base_dir = os.path.realpath(Path.cwd())
+    if resolved != base_dir and not resolved.startswith(base_dir + os.sep):
+        msg = f"--config {str(path)!r} is outside the working directory {base_dir!r}"
+        raise ValueError(msg)
+    return Path(resolved)
+
+
 def cli(argv: list[str] | None = None) -> int:
     """Entry point. Returns a process exit code.
 
@@ -80,7 +103,7 @@ def cli(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        settings = Settings.load(args.config)
+        settings = Settings.load(_confined_to_cwd(args.config))
     except FileNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE
