@@ -237,9 +237,11 @@ def _propose(assessment: Assessment, today: date) -> Proposal:
         lines.extend(
             [
                 "",
-                "Product and rate are deliberately not fixed here — ask "
-                "lawn-agents for the cited recommendation before applying, "
-                "and source what you don't have.",
+                (
+                    "Product and rate are deliberately not fixed here — ask "
+                    "lawn-agents for the cited recommendation before applying, "
+                    "and source what you don't have."
+                ),
             ]
         )
     return Proposal(
