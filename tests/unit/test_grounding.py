@@ -266,6 +266,34 @@ class TestProvenance:
         errors = grounding.verify(_rec(item), [], chemicals, config)
         assert [e.kind for e in errors] == ["provenance"]
 
+    @pytest.mark.parametrize(
+        ("passage_id", "cited_id"),
+        [
+            (
+                "url:https://info.supersod.com/lawn-care/zeon-zoysia-lawn-maintenance",
+                "info.supersod.com/lawn-care/zeon-zoysia-lawn-maintenance",
+            ),
+            ("url:https://example.test/page/", "https://example.test/page"),
+            ("pdf:2025 Warm Season E-Guide.pdf", "2025 Warm Season E-Guide.pdf"),
+        ],
+    )
+    def test_bare_form_of_a_retrieved_source_id_is_accepted(
+        self,
+        chemicals: ChemicalsConfig,
+        config: GroundingConfig,
+        passage_id: str,
+        cited_id: str,
+    ) -> None:
+        # 2026-10-21: the model cited the rendered, prefix-less form of a
+        # source that was in <sources>, and was refused for it twice.
+        item = CalendarItem(
+            category=ChemicalCategory.HERBICIDE,
+            action="Apply Celsius.",
+            citations=[_citation(source_id=cited_id, snippet=CELSIUS_LABEL_TEXT)],
+        )
+        errors = grounding.verify(_rec(item), [_passage(source_id=passage_id)], chemicals, config)
+        assert errors == []
+
 
 class TestSnippetGrounding:
     def test_invented_quote_is_flagged(
