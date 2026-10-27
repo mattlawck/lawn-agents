@@ -116,10 +116,7 @@ def reconcile(
     plan = Plan()
     owned_by_item = {t.item_id: t for t in tasks if t.owned and t.item_id}
 
-    for task in tasks:
-        if not task.is_overdue(today):
-            continue
-        (plan.overdue_owned if task.owned else plan.overdue_manual).append(task)
+    _collect_overdue(plan, tasks, today)
 
     for assessment in schedule.evaluate_all(items, climate, today=today, soil=soil):
         item = assessment.item
@@ -167,6 +164,14 @@ def apply(plan: Plan, client: TodoistClient, *, label: str | None) -> list[Task]
 
 
 # --- internals ------------------------------------------------------------
+
+
+def _collect_overdue(plan: Plan, tasks: list[Task], today: date) -> None:
+    """Sort overdue tasks into the plan by whether we created them."""
+    for task in tasks:
+        if task.is_overdue(today):
+            (plan.overdue_owned if task.owned else plan.overdue_manual).append(task)
+
 
 _STOPWORDS = frozenset({"the", "a", "an", "for", "and", "of", "on", "in", "to", "with"})
 

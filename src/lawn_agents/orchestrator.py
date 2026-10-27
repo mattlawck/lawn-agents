@@ -354,11 +354,7 @@ def _retrieve_with_bridges(
     # This only became worth doing once full-text search (ADR 0011) made
     # each brand query's top hits reliably the *right* product. Reserving
     # slots under vector-only retrieval just reserved the wrong document.
-    reserved: list[tuple[str, str]] = []
-    for ranked_for_query in per_query[1:]:  # skip the raw question
-        for key in ranked_for_query[:RESERVED_PER_BRIDGE_QUERY]:
-            if key not in reserved:
-                reserved.append(key)
+    reserved = _reserve_bridge_hits(per_query[1:])  # skip the raw question
 
     # Budget is computed AFTER reserving, not before: reserving six slots
     # into a five-slot result silently drops the last bridge query's
@@ -369,6 +365,16 @@ def _retrieve_with_bridges(
     ranked_keys = sorted(fused_scores.keys(), key=lambda k: fused_scores[k], reverse=True)
     ordered = reserved + [k for k in ranked_keys if k not in reserved]
     return [passage_by_key[k] for k in ordered[:top_k]]
+
+
+def _reserve_bridge_hits(bridge_rankings: list[list[tuple[str, str]]]) -> list[tuple[str, str]]:
+    """Each bridge query's top hits, deduped, in query order."""
+    reserved: list[tuple[str, str]] = []
+    for ranked_for_query in bridge_rankings:
+        for key in ranked_for_query[:RESERVED_PER_BRIDGE_QUERY]:
+            if key not in reserved:
+                reserved.append(key)
+    return reserved
 
 
 _RELEVANCE_GATE_SYSTEM = (
