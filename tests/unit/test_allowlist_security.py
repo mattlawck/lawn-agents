@@ -93,8 +93,9 @@ class TestRedirectGuard:
             return httpx.Response(200, html="<html><body>malicious copy</body></html>")
 
         client = httpx.Client(transport=httpx.MockTransport(handler))
+        source = self._source()
         with pytest.raises(RedirectedOffAllowlistError, match=r"evil\.example"):
-            fetch_url_text(self._source(), client, allowed_hosts=ALLOWLIST)
+            fetch_url_text(source, client, allowed_hosts=ALLOWLIST)
 
     def test_onsite_redirect_is_allowed(self) -> None:
         """Legitimate redirects (trailing slash, canonicalization) still work."""
