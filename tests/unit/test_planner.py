@@ -143,13 +143,9 @@ class TestPlanMonth:
 
     @pytest.mark.parametrize("bad_month", [0, 13, -1, 99])
     def test_invalid_month_raises(self, settings: Settings, bad_month: int) -> None:
+        injectables = _injectables(synthesizer=FakeChatModel(structured_responses=[]))
         with pytest.raises(ValueError, match=r"month must be 1\.\.12"):
-            planner.plan_month(
-                2026,
-                bad_month,
-                settings,
-                **_injectables(synthesizer=FakeChatModel(structured_responses=[])),
-            )
+            planner.plan_month(2026, bad_month, settings, **injectables)
 
 
 # --- plan_year -------------------------------------------------------------

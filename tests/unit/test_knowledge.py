@@ -395,8 +395,9 @@ class TestLanceDBStore:
         assert store.count() == 1
 
     def test_mismatched_lengths_raise(self, store: LanceDBStore) -> None:
+        chunk = _hgic_chunk(0)
         with pytest.raises(ValueError, match="must be the same length"):
-            store.add([_hgic_chunk(0)], [])
+            store.add([chunk], [])
 
     def test_add_empty_is_noop(self, store: LanceDBStore) -> None:
         store.add([], [])
